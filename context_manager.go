@@ -1,7 +1,6 @@
 package walletarmy
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math/big"
 	"sync"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/tranvictor/jarvis/accounts"
 	jarviscommon "github.com/tranvictor/jarvis/common"
@@ -21,8 +19,6 @@ import (
 	"github.com/tranvictor/jarvis/util/monitor"
 	"github.com/tranvictor/jarvis/util/reader"
 )
-
-var L2_GAS_OVERHEAD = big.NewInt(2432225336832 * 10)
 
 // ContextManager manages
 //  1. multiple wallets and their informations in its
@@ -242,7 +238,7 @@ func (cm *ContextManager) setPendingNonce(wallet common.Address, network network
 	walletNonces[network.GetChainID()] = big.NewInt(int64(nonce))
 }
 
-func (cm *ContextManager) PendingNonce(wallet common.Address, network networks.Network) *big.Int {
+func (cm *ContextManager) pendingNonce(wallet common.Address, network networks.Network) *big.Int {
 	cm.lock.RLock()
 	defer cm.lock.RUnlock()
 	walletPendingNonces := cm.pendingNonces[wallet]
@@ -272,7 +268,7 @@ func (cm *ContextManager) PendingNonce(wallet common.Address, network networks.N
 //     remote nonce in order not to mess up with the other txs, but give a warning
 //     5.3 if local > remote: means txs from this session are not broadcasted to the
 //     the notes, return local nonce and give warnings
-func (cm *ContextManager) Nonce(wallet common.Address, network networks.Network) (*big.Int, error) {
+func (cm *ContextManager) nonce(wallet common.Address, network networks.Network) (*big.Int, error) {
 	cm.nonceLock.Lock()
 	defer cm.nonceLock.Unlock()
 
@@ -290,7 +286,7 @@ func (cm *ContextManager) Nonce(wallet common.Address, network networks.Network)
 	// fmt.Printf("remote pending nonce: %d\n", remotePendingNonce)
 
 	var localPendingNonce uint64
-	localPendingNonceBig := cm.PendingNonce(wallet, network)
+	localPendingNonceBig := cm.pendingNonce(wallet, network)
 	// fmt.Printf("local pending nonce big: %d\n", localPendingNonceBig)
 
 	if localPendingNonceBig == nil {
@@ -390,81 +386,66 @@ func (cm *ContextManager) GasSetting(network networks.Network) (*GasInfo, error)
 	return cm.getGasSettingInfo(network), nil
 }
 
-func (cm *ContextManager) BroadcastRawTx(
-	data string,
-) (hash string, successful bool, allErrors error) {
-	rawTxBytes, err := hex.DecodeString(data)
-	if err != nil {
-		return "", false, fmt.Errorf(
-			"couldn't decode hex string. txdata should be in hex format WITHOUT 0x prefix",
-		)
-	}
-
-	tx := new(types.Transaction)
-	rlp.DecodeBytes(rawTxBytes, &tx)
-	return cm.BroadcastTx(tx)
-}
-
 // BuildSendAllNativeTx builds a transaction to send all native tokens to the given address
 // this function will use legacy transaction type to ensure there is not dusk left after the tx
-func (cm *ContextManager) BuildSendAllNativeTx(
-	from, to common.Address,
-	nonce *big.Int,
-	gasPrice float64,
-	tipCapGwei float64,
-	network networks.Network,
-) (tx *types.Transaction, err error) {
-	gasLimit := 21000
+// func (cm *ContextManager) buildSendAllNativeTx(
+// 	from, to common.Address,
+// 	nonce *big.Int,
+// 	gasPrice float64,
+// 	tipCapGwei float64,
+// 	network networks.Network,
+// ) (tx *types.Transaction, err error) {
+// 	gasLimit := 21000
+//
+// 	if nonce == nil {
+// 		nonce, err = cm.nonce(from, network)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err)
+// 		}
+// 	}
+//
+// 	if gasPrice == 0 {
+// 		gasInfo, err := cm.GasSetting(network)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("couldn't get gas price info from any nodes: %w", err)
+// 		}
+// 		gasPrice = gasInfo.GasPrice
+// 	}
+//
+// 	balance, err := cm.Reader(network).GetBalance(from.Hex())
+// 	if err != nil {
+// 		return nil, fmt.Errorf("couldn't get balance of the wallet from any nodes: %w", err)
+// 	}
+//
+// 	// amount to send = balance - gasLimit * gasPrice * 10^9
+// 	amountToSend := big.NewInt(0).Sub(
+// 		balance,
+// 		big.NewInt(0).Mul(
+// 			big.NewInt(int64(gasLimit)),
+// 			jarviscommon.GweiToWei(gasPrice),
+// 		),
+// 	)
+//
+// 	amountToSend = big.NewInt(0).Sub(amountToSend, L2_GAS_OVERHEAD)
+//
+// 	if amountToSend.Cmp(big.NewInt(0)) <= 0 {
+// 		return nil, fmt.Errorf("amount to send is less than the gas overhead")
+// 	}
+//
+// 	return cm.BuildTx(
+// 		types.LegacyTxType,
+// 		from, to,
+// 		nonce,
+// 		amountToSend,
+// 		uint64(gasLimit),
+// 		gasPrice,
+// 		0,
+// 		nil,
+// 		network,
+// 	)
+// }
 
-	if nonce == nil {
-		nonce, err = cm.Nonce(from, network)
-		if err != nil {
-			return nil, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err)
-		}
-	}
-
-	if gasPrice == 0 {
-		gasInfo, err := cm.GasSetting(network)
-		if err != nil {
-			return nil, fmt.Errorf("couldn't get gas price info from any nodes: %w", err)
-		}
-		gasPrice = gasInfo.GasPrice
-	}
-
-	balance, err := cm.Reader(network).GetBalance(from.Hex())
-	if err != nil {
-		return nil, fmt.Errorf("couldn't get balance of the wallet from any nodes: %w", err)
-	}
-
-	// amount to send = balance - gasLimit * gasPrice * 10^9
-	amountToSend := big.NewInt(0).Sub(
-		balance,
-		big.NewInt(0).Mul(
-			big.NewInt(int64(gasLimit)),
-			jarviscommon.GweiToWei(gasPrice),
-		),
-	)
-
-	amountToSend = big.NewInt(0).Sub(amountToSend, L2_GAS_OVERHEAD)
-
-	if amountToSend.Cmp(big.NewInt(0)) <= 0 {
-		return nil, fmt.Errorf("amount to send is less than the gas overhead")
-	}
-
-	return cm.BuildTx(
-		types.LegacyTxType,
-		from, to,
-		nonce,
-		amountToSend,
-		uint64(gasLimit),
-		gasPrice,
-		0,
-		nil,
-		network,
-	)
-}
-
-func (cm *ContextManager) BuildTx(
+func (cm *ContextManager) buildTx(
 	txType uint8,
 	from, to common.Address,
 	nonce *big.Int,
@@ -491,7 +472,7 @@ func (cm *ContextManager) BuildTx(
 	}
 
 	if nonce == nil {
-		nonce, err = cm.Nonce(from, network)
+		nonce, err = cm.nonce(from, network)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err)
 		}
@@ -519,7 +500,7 @@ func (cm *ContextManager) BuildTx(
 	), nil
 }
 
-func (cm *ContextManager) SignTx(
+func (cm *ContextManager) signTx(
 	wallet common.Address,
 	tx *types.Transaction,
 	network networks.Network,
@@ -536,12 +517,12 @@ func (cm *ContextManager) SignTx(
 	return acc.SignTx(tx, big.NewInt(int64(network.GetChainID())))
 }
 
-func (cm *ContextManager) SignTxAndBroadcast(
+func (cm *ContextManager) signTxAndBroadcast(
 	wallet common.Address,
 	tx *types.Transaction,
 	network networks.Network,
 ) (signedTx *types.Transaction, successful bool, err BroadcastError) {
-	signedAddr, tx, err := cm.SignTx(wallet, tx, network)
+	signedAddr, tx, err := cm.signTx(wallet, tx, network)
 	if err != nil {
 		return tx, false, err
 	}
@@ -552,7 +533,7 @@ func (cm *ContextManager) SignTxAndBroadcast(
 			signedAddr.Hex(),
 		)
 	}
-	_, broadcasted, allErrors := cm.BroadcastTx(tx)
+	_, broadcasted, allErrors := cm.broadcastTx(tx)
 	return tx, broadcasted, allErrors
 }
 
@@ -568,7 +549,7 @@ func (cm *ContextManager) registerBroadcastedTx(tx *types.Transaction, network n
 	return nil
 }
 
-func (cm *ContextManager) BroadcastTx(
+func (cm *ContextManager) broadcastTx(
 	tx *types.Transaction,
 ) (hash string, broadcasted bool, err BroadcastError) {
 	network, err := networks.GetNetworkByID(tx.ChainId().Uint64())
@@ -611,4 +592,164 @@ func (cm *ContextManager) MonitorTx(tx *types.Transaction, network networks.Netw
 		close(statusChan)
 	}()
 	return statusChan
+}
+
+func (cm *ContextManager) getTxStatuses(oldTxs map[string]*types.Transaction, network networks.Network) (statuses []jarviscommon.TxInfo, err error) {
+	result := []jarviscommon.TxInfo{}
+
+	for _, tx := range oldTxs {
+		txInfo, _ := cm.Reader(network).TxInfoFromHash(tx.Hash().Hex())
+		result = append(result, txInfo)
+	}
+
+	return result, nil
+}
+
+// EnsureTx ensures the tx is broadcasted and mined, it will retry until the tx is mined
+func (cm *ContextManager) EnsureTx(
+	txType uint8,
+	from, to common.Address,
+	value *big.Int,
+	gasLimit uint64,
+	gasPrice float64,
+	tipCapGwei float64,
+	data []byte,
+	network networks.Network,
+) (tx *types.Transaction, err error) {
+	var oldTxs map[string]*types.Transaction = map[string]*types.Transaction{}
+	var retryNonce *big.Int
+	var retryGasPrice float64 = gasPrice
+	var retryTipCap float64 = tipCapGwei
+
+	// retry loop for at max 10 times
+	for i := 0; i < 10; i++ {
+		// always sleep for 5 seconds before retrying
+		if i > 0 {
+			time.Sleep(5 * time.Second)
+		}
+
+		tx, err = cm.buildTx(
+			txType,        // tx type
+			from,          // from address
+			to,            // to address
+			retryNonce,    // nonce (if nil means context manager will determine the nonce)
+			value,         // amount
+			gasLimit,      // gas limit
+			retryGasPrice, // gas price
+			retryTipCap,   // tip cap
+			data,          // data
+			network,       // network
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("error building transaction: %s", err)
+		}
+
+		signexTx, successful, broadcastErr := cm.signTxAndBroadcast(from, tx, network)
+
+		if signexTx != nil {
+			oldTxs[signexTx.Hash().Hex()] = signexTx
+		}
+
+		if !successful {
+			fmt.Printf(
+				"Error signing and broadcasting transaction %s - Nonce: %d, Gas Price: %s, Tip Cap: %s, Max Fee Per Gas: %s   - Error: %s\n",
+				signexTx.Hash().Hex(),
+				tx.Nonce(),
+				tx.GasPrice().String(),
+				tx.GasTipCap().String(),
+				tx.GasFeeCap().String(),
+				broadcastErr,
+			)
+
+			// there are a few cases we should handle
+			// 1. insufficient fund
+			if broadcastErr == ErrInsufficientFund {
+				// wait for 5 seconds and retry with the same nonce because the nonce is already acquired from
+				// the context manager
+				retryNonce = big.NewInt(int64(tx.Nonce()))
+				continue
+			}
+
+			// 2. nonce is low
+			if broadcastErr == ErrNonceIsLow {
+				// in this case, we need to check if the last transaction is mined or it is lost
+				statuses, err := cm.getTxStatuses(oldTxs, network)
+				if err != nil {
+					fmt.Printf("Error getting tx statuses in case where tx wasn't broadcasted because nonce is too low: %s. Ignore and continue the retry loop\n", err)
+					// ignore the error and retry
+					continue
+				}
+				// if it is mined, we don't need to do anything, just stop the loop and return
+				oldTxMined := false
+				for _, status := range statuses {
+					if status.Status == "done" || status.Status == "reverted" {
+						oldTxMined = true
+						break
+					}
+				}
+				if oldTxMined {
+					return signexTx, nil
+				}
+
+				// in this case, old txes weren't mined but the nonce is already used, it means
+				// a different tx is with the same nonce was mined somewhere else
+				// so we need to retry with a new nonce
+				retryNonce = nil
+				continue
+			}
+
+			// 3. gas limit is too low
+			if broadcastErr == ErrGasLimitIsTooLow {
+				// in this case, we just rely on the loop to hope it will finally have a better gas limit estimation
+				// however, the same nonce must be used since it is acquired from the context manager already
+				retryNonce = big.NewInt(int64(tx.Nonce()))
+				continue
+			}
+
+			// 4. tx is known
+			if broadcastErr == ErrTxIsKnown {
+				// in this case, we need to speed up the tx by increasing the gas price and tip cap
+				// however, it should be handled by the slow status gotten from the monitor tx below
+				// so we just need to retry with the same nonce
+				retryNonce = big.NewInt(int64(tx.Nonce()))
+				continue
+			}
+
+			retryNonce = big.NewInt(int64(tx.Nonce()))
+			continue
+		} else {
+			fmt.Printf(
+				"Signed and broadcasted transaction %s - Nonce: %d, Gas Price: %s, Tip Cap: %s, Max Fee Per Gas: %s\n",
+				signexTx.Hash().Hex(),
+				tx.Nonce(),
+				tx.GasPrice().String(),
+				tx.GasTipCap().String(),
+				tx.GasFeeCap().String(),
+			)
+		}
+
+		statusChan := cm.MonitorTx(signexTx, network)
+		status := <-statusChan
+		switch status {
+		case "mined":
+			return signexTx, nil
+		case "reverted":
+			fmt.Printf("Transaction %s reverted, retrying...\n", signexTx.Hash().Hex())
+			retryNonce = nil
+			time.Sleep(5 * time.Second)
+		case "lost":
+			fmt.Printf("Transaction %s lost, retrying...\n", signexTx.Hash().Hex())
+			retryNonce = nil
+			time.Sleep(5 * time.Second)
+		case "slow":
+			fmt.Printf("Transaction %s slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...\n", signexTx.Hash().Hex())
+			retryGasPrice = jarviscommon.BigToFloat(tx.GasPrice(), 9) * 1.2
+			retryTipCap = jarviscommon.BigToFloat(tx.GasTipCap(), 9) * 1.1
+			retryNonce = big.NewInt(int64(tx.Nonce()))
+			time.Sleep(5 * time.Second)
+		}
+	}
+
+	return nil, fmt.Errorf("failed to ensure tx is mined after all retries")
 }
