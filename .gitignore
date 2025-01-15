@@ -18,6 +18,7 @@
 # vendor/
 
 cmd/fund_distribution/private_keys.json
+cmd/fund_distribution/fund_distribution
 
 # Go workspace file
 go.work
