@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KyberNetwork/logger"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
@@ -273,21 +274,17 @@ func (wm *WalletManager) nonce(wallet common.Address, network networks.Network) 
 	if err != nil {
 		return nil, fmt.Errorf("couldn't get mined nonce in context manager: %s", err)
 	}
-	// fmt.Printf("mined nonce: %d\n", minedNonce)
 
 	remotePendingNonce, err := reader.GetPendingNonce(wallet.Hex())
 	if err != nil {
 		return nil, fmt.Errorf("couldn't get remote pending nonce in context manager: %s", err)
 	}
-	// fmt.Printf("remote pending nonce: %d\n", remotePendingNonce)
 
 	var localPendingNonce uint64
 	localPendingNonceBig := wm.pendingNonce(wallet, network)
-	// fmt.Printf("local pending nonce big: %d\n", localPendingNonceBig)
 
 	if localPendingNonceBig == nil {
 		wm.setPendingNonce(wallet, network, remotePendingNonce)
-		// fmt.Printf("set local pending nonce to remote pending nonce: %d\n", remotePendingNonce)
 		localPendingNonce = remotePendingNonce
 	} else {
 		localPendingNonce = localPendingNonceBig.Uint64()
@@ -305,12 +302,10 @@ func (wm *WalletManager) nonce(wallet common.Address, network networks.Network) 
 			// in this case, minedNonce is more up to date, update localPendingNonce
 			// and return minedNonce
 			wm.setPendingNonce(wallet, network, minedNonce)
-			// fmt.Printf("localPending nonce <= mined nonce, set local pending nonce to mined nonce: %d. RETURN\n", minedNonce)
 			return big.NewInt(int64(minedNonce)), nil
 		} else {
 			// in this case, local is more up to date, return pending nonce
 			wm.setPendingNonce(wallet, network, localPendingNonce) // update local nonce to the latest
-			// fmt.Printf("localPending nonce > mined nonce, set local pending nonce to local pending nonce: %d. RETURN\n", localPendingNonce)
 			return big.NewInt(int64(localPendingNonce)), nil
 		}
 	}
@@ -323,14 +318,12 @@ func (wm *WalletManager) nonce(wallet common.Address, network networks.Network) 
 		// we don't have to update local pending nonce here since
 		// it will be updated if the new tx is broadcasted with context manager
 		wm.setPendingNonce(wallet, network, remotePendingNonce) // update local nonce to the latest
-		// fmt.Printf("set local pending nonce to remote pending nonce: %d. RETURN\n", remotePendingNonce)
 		return big.NewInt(int64(remotePendingNonce)), nil
 	} else if localPendingNonce <= remotePendingNonce {
 		// minedNonce < localPendingNonce <= remotePendingNonce
 		// similar to the previous case, however, there are pending txs came from
 		// jarvis as well. No need special treatments
 		wm.setPendingNonce(wallet, network, remotePendingNonce) // update local nonce to the latest
-		// fmt.Printf("set local pending nonce to remote pending nonce: %d. RETURN\n", remotePendingNonce)
 		return big.NewInt(int64(remotePendingNonce)), nil
 	}
 	// minedNonce < remotePendingNonce < localPendingNonce
@@ -342,7 +335,6 @@ func (wm *WalletManager) nonce(wallet common.Address, network networks.Network) 
 	// a mechanism to stop trying as well.
 	// For now, we will just go ahead with localPendingNonce
 	wm.setPendingNonce(wallet, network, localPendingNonce) // update local nonce to the latest
-	// fmt.Printf("set local pending nonce to local pending nonce: %d. RETURN\n", localPendingNonce)
 	return big.NewInt(int64(localPendingNonce)), nil
 }
 
@@ -531,18 +523,23 @@ func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Netwo
 	return statusChan
 }
 
-func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, network networks.Network) (statuses []jarviscommon.TxInfo, err error) {
-	result := []jarviscommon.TxInfo{}
+func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, network networks.Network) (statuses map[string]jarviscommon.TxInfo, err error) {
+	result := map[string]jarviscommon.TxInfo{}
 
 	for _, tx := range oldTxs {
 		txInfo, _ := wm.Reader(network).TxInfoFromHash(tx.Hash().Hex())
-		result = append(result, txInfo)
+		result[tx.Hash().Hex()] = txInfo
 	}
 
 	return result, nil
 }
 
 // EnsureTx ensures the tx is broadcasted and mined, it will retry until the tx is mined
+// it returns nil and error if:
+//  1. the tx couldn't be built
+//  2. the tx couldn't be broadcasted and get mined after 10 retries
+//
+// It always returns the tx that was mined, either if the tx was successful or reverted
 func (wm *WalletManager) EnsureTx(
 	txType uint8,
 	from, to common.Address,
@@ -589,15 +586,14 @@ func (wm *WalletManager) EnsureTx(
 		}
 
 		if !successful {
-			fmt.Printf(
-				"Error signing and broadcasting transaction %s - Nonce: %d, Gas Price: %s, Tip Cap: %s, Max Fee Per Gas: %s   - Error: %s\n",
-				signexTx.Hash().Hex(),
-				tx.Nonce(),
-				tx.GasPrice().String(),
-				tx.GasTipCap().String(),
-				tx.GasFeeCap().String(),
-				broadcastErr,
-			)
+			logger.WithFields(logger.Fields{
+				"tx_hash":         signexTx.Hash().Hex(),
+				"nonce":           tx.Nonce(),
+				"gas_price":       tx.GasPrice().String(),
+				"tip_cap":         tx.GasTipCap().String(),
+				"max_fee_per_gas": tx.GasFeeCap().String(),
+				"error":           broadcastErr,
+			}).Debug("Unsuccessful signing and broadcasting transaction")
 
 			// there are a few cases we should handle
 			// 1. insufficient fund
@@ -613,20 +609,17 @@ func (wm *WalletManager) EnsureTx(
 				// in this case, we need to check if the last transaction is mined or it is lost
 				statuses, err := wm.getTxStatuses(oldTxs, network)
 				if err != nil {
-					fmt.Printf("Error getting tx statuses in case where tx wasn't broadcasted because nonce is too low: %s. Ignore and continue the retry loop\n", err)
+					logger.WithFields(logger.Fields{
+						"error": err,
+					}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
 					// ignore the error and retry
 					continue
 				}
 				// if it is mined, we don't need to do anything, just stop the loop and return
-				oldTxMined := false
-				for _, status := range statuses {
+				for txhash, status := range statuses {
 					if status.Status == "done" || status.Status == "reverted" {
-						oldTxMined = true
-						break
+						return oldTxs[txhash], nil
 					}
-				}
-				if oldTxMined {
-					return signexTx, nil
 				}
 
 				// in this case, old txes weren't mined but the nonce is already used, it means
@@ -656,31 +649,30 @@ func (wm *WalletManager) EnsureTx(
 			retryNonce = big.NewInt(int64(tx.Nonce()))
 			continue
 		} else {
-			fmt.Printf(
-				"Signed and broadcasted transaction %s - Nonce: %d, Gas Price: %s, Tip Cap: %s, Max Fee Per Gas: %s\n",
-				signexTx.Hash().Hex(),
-				tx.Nonce(),
-				tx.GasPrice().String(),
-				tx.GasTipCap().String(),
-				tx.GasFeeCap().String(),
-			)
+			logger.WithFields(logger.Fields{
+				"tx_hash":         signexTx.Hash().Hex(),
+				"nonce":           tx.Nonce(),
+				"gas_price":       tx.GasPrice().String(),
+				"tip_cap":         tx.GasTipCap().String(),
+				"max_fee_per_gas": tx.GasFeeCap().String(),
+			}).Info("Signed and broadcasted transaction")
 		}
 
 		statusChan := wm.MonitorTx(signexTx, network)
 		status := <-statusChan
 		switch status {
-		case "mined":
+		case "mined", "reverted":
 			return signexTx, nil
-		case "reverted":
-			fmt.Printf("Transaction %s reverted, retrying...\n", signexTx.Hash().Hex())
-			retryNonce = nil
-			time.Sleep(5 * time.Second)
 		case "lost":
-			fmt.Printf("Transaction %s lost, retrying...\n", signexTx.Hash().Hex())
+			logger.WithFields(logger.Fields{
+				"tx_hash": signexTx.Hash().Hex(),
+			}).Info("Transaction lost, retrying...")
 			retryNonce = nil
 			time.Sleep(5 * time.Second)
 		case "slow":
-			fmt.Printf("Transaction %s slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...\n", signexTx.Hash().Hex())
+			logger.WithFields(logger.Fields{
+				"tx_hash": signexTx.Hash().Hex(),
+			}).Info("Transaction slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...")
 			retryGasPrice = jarviscommon.BigToFloat(tx.GasPrice(), 9) * 1.2
 			retryTipCap = jarviscommon.BigToFloat(tx.GasTipCap(), 9) * 1.1
 			retryNonce = big.NewInt(int64(tx.Nonce()))
