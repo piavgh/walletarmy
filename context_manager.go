@@ -30,8 +30,7 @@ import (
 //     and will be stored as cache for a while
 //  3. txs in the context manager's life time
 type ContextManager struct {
-	nonceLock sync.Mutex
-	lock      sync.RWMutex
+	lock sync.RWMutex
 
 	// readers stores all reader instances for all networks that ever interacts
 	// with accounts manager. ChainID of the network is used as the key.
@@ -52,7 +51,6 @@ type ContextManager struct {
 
 func NewContextManager() *ContextManager {
 	return &ContextManager{
-		nonceLock:     sync.Mutex{},
 		lock:          sync.RWMutex{},
 		readers:       map[uint64]*reader.EthReader{},
 		broadcasters:  map[uint64]*broadcaster.Broadcaster{},
@@ -269,8 +267,6 @@ func (cm *ContextManager) pendingNonce(wallet common.Address, network networks.N
 //     5.3 if local > remote: means txs from this session are not broadcasted to the
 //     the notes, return local nonce and give warnings
 func (cm *ContextManager) nonce(wallet common.Address, network networks.Network) (*big.Int, error) {
-	cm.nonceLock.Lock()
-	defer cm.nonceLock.Unlock()
 
 	reader := cm.Reader(network)
 	minedNonce, err := reader.GetMinedNonce(wallet.Hex())

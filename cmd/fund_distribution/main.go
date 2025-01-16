@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 
@@ -45,12 +46,17 @@ func ExecuteStrategy(network networks.Network, strategy TransferStrategyFunc, pr
 	// loop through the transfers and execute them as fast as possible using the army context in parallel
 	// this ensures all of the transfers are executed (transactions are mined and no transaction is dropped)
 
+	startTime := time.Now()
+
 	err = ParallelExecuteTransfers(cm, initialBalances, transfers, privateKeyConfigs, network)
 	fmt.Println("Transfers executed successfully")
 
 	if err != nil {
 		fmt.Printf("However %s\n", err)
 	}
+
+	elapsedTime := time.Since(startTime)
+	fmt.Printf("================ Time taken in seconds: %f\n", elapsedTime.Seconds())
 
 	// Verify the balances
 	balances, err = GetBalances(network, privateKeyConfigs)
