@@ -2,11 +2,9 @@ module github.com/tranvictor/walletarmy
 
 go 1.23.2
 
-replace github.com/tranvictor/jarvis => /Users/victor/go/src/github.com/tranvictor/jarvis
-
 require (
 	github.com/ethereum/go-ethereum v1.14.12
-	github.com/tranvictor/jarvis v0.0.31
+	github.com/tranvictor/jarvis v0.0.32
 )
 
 require (
@@ -64,5 +62,3 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
-
-replace github.com/tranvictor/jarvis => /Users/victor/go/src/github.com/tranvictor/jarvis
