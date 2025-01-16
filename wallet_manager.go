@@ -20,7 +20,7 @@ import (
 	"github.com/tranvictor/jarvis/util/reader"
 )
 
-// ContextManager manages
+// WalletManager manages
 //  1. multiple wallets and their informations in its
 //     life time. It basically gives next nonce to do transaction for specific
 //     wallet and specific network.
@@ -29,7 +29,7 @@ import (
 //  2. multiple networks gas price. The gas price will be queried lazily prior to txs
 //     and will be stored as cache for a while
 //  3. txs in the context manager's life time
-type ContextManager struct {
+type WalletManager struct {
 	lock sync.RWMutex
 
 	// readers stores all reader instances for all networks that ever interacts
@@ -49,8 +49,8 @@ type ContextManager struct {
 	gasSettings map[uint64]*GasInfo
 }
 
-func NewContextManager() *ContextManager {
-	return &ContextManager{
+func NewWalletManager() *WalletManager {
+	return &WalletManager{
 		lock:          sync.RWMutex{},
 		readers:       map[uint64]*reader.EthReader{},
 		broadcasters:  map[uint64]*broadcaster.Broadcaster{},
@@ -63,13 +63,13 @@ func NewContextManager() *ContextManager {
 	}
 }
 
-func (cm *ContextManager) SetAccount(acc *account.Account) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-	cm.accounts[acc.Address()] = acc
+func (wm *WalletManager) SetAccount(acc *account.Account) {
+	wm.lock.Lock()
+	defer wm.lock.Unlock()
+	wm.accounts[acc.Address()] = acc
 }
 
-func (cm *ContextManager) UnlockAccount(addr common.Address) (*account.Account, error) {
+func (wm *WalletManager) UnlockAccount(addr common.Address) (*account.Account, error) {
 	accDesc, err := accounts.GetAccount(addr.Hex())
 	if err != nil {
 		return nil, fmt.Errorf("wallet %s doesn't exist in jarvis", addr.Hex())
@@ -78,41 +78,41 @@ func (cm *ContextManager) UnlockAccount(addr common.Address) (*account.Account, 
 	if err != nil {
 		return nil, fmt.Errorf("unlocking wallet failed: %w", err)
 	}
-	cm.SetAccount(acc)
+	wm.SetAccount(acc)
 	return acc, nil
 }
 
-func (cm *ContextManager) Account(wallet common.Address) *account.Account {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	return cm.accounts[wallet]
+func (wm *WalletManager) Account(wallet common.Address) *account.Account {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	return wm.accounts[wallet]
 }
 
-func (cm *ContextManager) setTx(wallet common.Address, network networks.Network, tx *types.Transaction) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
+func (wm *WalletManager) setTx(wallet common.Address, network networks.Network, tx *types.Transaction) {
+	wm.lock.Lock()
+	defer wm.lock.Unlock()
 
-	if cm.txs[wallet] == nil {
-		cm.txs[wallet] = map[uint64]map[uint64]*types.Transaction{}
+	if wm.txs[wallet] == nil {
+		wm.txs[wallet] = map[uint64]map[uint64]*types.Transaction{}
 	}
 
-	if cm.txs[wallet][network.GetChainID()] == nil {
-		cm.txs[wallet][network.GetChainID()] = map[uint64]*types.Transaction{}
+	if wm.txs[wallet][network.GetChainID()] == nil {
+		wm.txs[wallet][network.GetChainID()] = map[uint64]*types.Transaction{}
 	}
 
-	cm.txs[wallet][network.GetChainID()][uint64(tx.Nonce())] = tx
+	wm.txs[wallet][network.GetChainID()][uint64(tx.Nonce())] = tx
 }
 
-func (cm *ContextManager) getBroadcaster(network networks.Network) *broadcaster.Broadcaster {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	return cm.broadcasters[network.GetChainID()]
+func (wm *WalletManager) getBroadcaster(network networks.Network) *broadcaster.Broadcaster {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	return wm.broadcasters[network.GetChainID()]
 }
 
-func (cm *ContextManager) Broadcaster(network networks.Network) *broadcaster.Broadcaster {
-	broadcaster := cm.getBroadcaster(network)
+func (wm *WalletManager) Broadcaster(network networks.Network) *broadcaster.Broadcaster {
+	broadcaster := wm.getBroadcaster(network)
 	if broadcaster == nil {
-		err := cm.initNetwork(network)
+		err := wm.initNetwork(network)
 		if err != nil {
 			panic(
 				fmt.Errorf(
@@ -122,21 +122,21 @@ func (cm *ContextManager) Broadcaster(network networks.Network) *broadcaster.Bro
 				),
 			)
 		}
-		return cm.getBroadcaster(network)
+		return wm.getBroadcaster(network)
 	}
 	return broadcaster
 }
 
-func (cm *ContextManager) getReader(network networks.Network) *reader.EthReader {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	return cm.readers[network.GetChainID()]
+func (wm *WalletManager) getReader(network networks.Network) *reader.EthReader {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	return wm.readers[network.GetChainID()]
 }
 
-func (cm *ContextManager) Reader(network networks.Network) *reader.EthReader {
-	reader := cm.getReader(network)
+func (wm *WalletManager) Reader(network networks.Network) *reader.EthReader {
+	reader := wm.getReader(network)
 	if reader == nil {
-		err := cm.initNetwork(network)
+		err := wm.initNetwork(network)
 		if err != nil {
 			panic(
 				fmt.Errorf(
@@ -146,27 +146,27 @@ func (cm *ContextManager) Reader(network networks.Network) *reader.EthReader {
 				),
 			)
 		}
-		return cm.getReader(network)
+		return wm.getReader(network)
 	}
 	return reader
 }
 
-func (cm *ContextManager) getAnalyzer(network networks.Network) *txanalyzer.TxAnalyzer {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	return cm.analyzers[network.GetChainID()]
+func (wm *WalletManager) getAnalyzer(network networks.Network) *txanalyzer.TxAnalyzer {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	return wm.analyzers[network.GetChainID()]
 }
 
-func (cm *ContextManager) getTxMonitor(network networks.Network) *monitor.TxMonitor {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	return cm.txMonitors[network.GetChainID()]
+func (wm *WalletManager) getTxMonitor(network networks.Network) *monitor.TxMonitor {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	return wm.txMonitors[network.GetChainID()]
 }
 
-func (cm *ContextManager) Analyzer(network networks.Network) *txanalyzer.TxAnalyzer {
-	analyzer := cm.getAnalyzer(network)
+func (wm *WalletManager) Analyzer(network networks.Network) *txanalyzer.TxAnalyzer {
+	analyzer := wm.getAnalyzer(network)
 	if analyzer == nil {
-		err := cm.initNetwork(network)
+		err := wm.initNetwork(network)
 		if err != nil {
 			panic(
 				fmt.Errorf(
@@ -176,58 +176,58 @@ func (cm *ContextManager) Analyzer(network networks.Network) *txanalyzer.TxAnaly
 				),
 			)
 		}
-		return cm.getAnalyzer(network)
+		return wm.getAnalyzer(network)
 	}
 	return analyzer
 }
 
-func (cm *ContextManager) initNetwork(network networks.Network) (err error) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
+func (wm *WalletManager) initNetwork(network networks.Network) (err error) {
+	wm.lock.Lock()
+	defer wm.lock.Unlock()
 
-	reader, found := cm.readers[network.GetChainID()]
+	reader, found := wm.readers[network.GetChainID()]
 	if !found {
 		reader, err = util.EthReader(network)
 		if err != nil {
 			return err
 		}
 	}
-	cm.readers[network.GetChainID()] = reader
+	wm.readers[network.GetChainID()] = reader
 
-	analyzer, found := cm.analyzers[network.GetChainID()]
+	analyzer, found := wm.analyzers[network.GetChainID()]
 	if !found {
 		analyzer = txanalyzer.NewGenericAnalyzer(reader, network)
 		if err != nil {
 			return err
 		}
 	}
-	cm.analyzers[network.GetChainID()] = analyzer
+	wm.analyzers[network.GetChainID()] = analyzer
 
-	broadcaster, found := cm.broadcasters[network.GetChainID()]
+	broadcaster, found := wm.broadcasters[network.GetChainID()]
 	if !found {
 		broadcaster, err = util.EthBroadcaster(network)
 		if err != nil {
 			return err
 		}
 	}
-	cm.broadcasters[network.GetChainID()] = broadcaster
+	wm.broadcasters[network.GetChainID()] = broadcaster
 
-	txMonitor, found := cm.txMonitors[network.GetChainID()]
+	txMonitor, found := wm.txMonitors[network.GetChainID()]
 	if !found {
 		txMonitor = monitor.NewGenericTxMonitor(reader)
 	}
-	cm.txMonitors[network.GetChainID()] = txMonitor
+	wm.txMonitors[network.GetChainID()] = txMonitor
 
 	return nil
 }
 
-func (cm *ContextManager) setPendingNonce(wallet common.Address, network networks.Network, nonce uint64) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-	walletNonces := cm.pendingNonces[wallet]
+func (wm *WalletManager) setPendingNonce(wallet common.Address, network networks.Network, nonce uint64) {
+	wm.lock.Lock()
+	defer wm.lock.Unlock()
+	walletNonces := wm.pendingNonces[wallet]
 	if walletNonces == nil {
 		walletNonces = map[uint64]*big.Int{}
-		cm.pendingNonces[wallet] = walletNonces
+		wm.pendingNonces[wallet] = walletNonces
 	}
 	oldNonce := walletNonces[network.GetChainID()]
 	if oldNonce != nil && oldNonce.Cmp(big.NewInt(int64(nonce))) >= 0 {
@@ -236,10 +236,10 @@ func (cm *ContextManager) setPendingNonce(wallet common.Address, network network
 	walletNonces[network.GetChainID()] = big.NewInt(int64(nonce))
 }
 
-func (cm *ContextManager) pendingNonce(wallet common.Address, network networks.Network) *big.Int {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	walletPendingNonces := cm.pendingNonces[wallet]
+func (wm *WalletManager) pendingNonce(wallet common.Address, network networks.Network) *big.Int {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	walletPendingNonces := wm.pendingNonces[wallet]
 	if walletPendingNonces == nil {
 		return nil
 	}
@@ -266,9 +266,9 @@ func (cm *ContextManager) pendingNonce(wallet common.Address, network networks.N
 //     remote nonce in order not to mess up with the other txs, but give a warning
 //     5.3 if local > remote: means txs from this session are not broadcasted to the
 //     the notes, return local nonce and give warnings
-func (cm *ContextManager) nonce(wallet common.Address, network networks.Network) (*big.Int, error) {
+func (wm *WalletManager) nonce(wallet common.Address, network networks.Network) (*big.Int, error) {
 
-	reader := cm.Reader(network)
+	reader := wm.Reader(network)
 	minedNonce, err := reader.GetMinedNonce(wallet.Hex())
 	if err != nil {
 		return nil, fmt.Errorf("couldn't get mined nonce in context manager: %s", err)
@@ -282,11 +282,11 @@ func (cm *ContextManager) nonce(wallet common.Address, network networks.Network)
 	// fmt.Printf("remote pending nonce: %d\n", remotePendingNonce)
 
 	var localPendingNonce uint64
-	localPendingNonceBig := cm.pendingNonce(wallet, network)
+	localPendingNonceBig := wm.pendingNonce(wallet, network)
 	// fmt.Printf("local pending nonce big: %d\n", localPendingNonceBig)
 
 	if localPendingNonceBig == nil {
-		cm.setPendingNonce(wallet, network, remotePendingNonce)
+		wm.setPendingNonce(wallet, network, remotePendingNonce)
 		// fmt.Printf("set local pending nonce to remote pending nonce: %d\n", remotePendingNonce)
 		localPendingNonce = remotePendingNonce
 	} else {
@@ -304,12 +304,12 @@ func (cm *ContextManager) nonce(wallet common.Address, network networks.Network)
 		if localPendingNonce <= minedNonce {
 			// in this case, minedNonce is more up to date, update localPendingNonce
 			// and return minedNonce
-			cm.setPendingNonce(wallet, network, minedNonce)
+			wm.setPendingNonce(wallet, network, minedNonce)
 			// fmt.Printf("localPending nonce <= mined nonce, set local pending nonce to mined nonce: %d. RETURN\n", minedNonce)
 			return big.NewInt(int64(minedNonce)), nil
 		} else {
 			// in this case, local is more up to date, return pending nonce
-			cm.setPendingNonce(wallet, network, localPendingNonce) // update local nonce to the latest
+			wm.setPendingNonce(wallet, network, localPendingNonce) // update local nonce to the latest
 			// fmt.Printf("localPending nonce > mined nonce, set local pending nonce to local pending nonce: %d. RETURN\n", localPendingNonce)
 			return big.NewInt(int64(localPendingNonce)), nil
 		}
@@ -322,14 +322,14 @@ func (cm *ContextManager) nonce(wallet common.Address, network networks.Network)
 		// TODO: put warnings
 		// we don't have to update local pending nonce here since
 		// it will be updated if the new tx is broadcasted with context manager
-		cm.setPendingNonce(wallet, network, remotePendingNonce) // update local nonce to the latest
+		wm.setPendingNonce(wallet, network, remotePendingNonce) // update local nonce to the latest
 		// fmt.Printf("set local pending nonce to remote pending nonce: %d. RETURN\n", remotePendingNonce)
 		return big.NewInt(int64(remotePendingNonce)), nil
 	} else if localPendingNonce <= remotePendingNonce {
 		// minedNonce < localPendingNonce <= remotePendingNonce
 		// similar to the previous case, however, there are pending txs came from
 		// jarvis as well. No need special treatments
-		cm.setPendingNonce(wallet, network, remotePendingNonce) // update local nonce to the latest
+		wm.setPendingNonce(wallet, network, remotePendingNonce) // update local nonce to the latest
 		// fmt.Printf("set local pending nonce to remote pending nonce: %d. RETURN\n", remotePendingNonce)
 		return big.NewInt(int64(remotePendingNonce)), nil
 	}
@@ -341,29 +341,29 @@ func (cm *ContextManager) nonce(wallet common.Address, network networks.Network)
 	// local pending nonce respectively and retry not found txs, need to figure out
 	// a mechanism to stop trying as well.
 	// For now, we will just go ahead with localPendingNonce
-	cm.setPendingNonce(wallet, network, localPendingNonce) // update local nonce to the latest
+	wm.setPendingNonce(wallet, network, localPendingNonce) // update local nonce to the latest
 	// fmt.Printf("set local pending nonce to local pending nonce: %d. RETURN\n", localPendingNonce)
 	return big.NewInt(int64(localPendingNonce)), nil
 }
 
-func (cm *ContextManager) getGasSettingInfo(network networks.Network) *GasInfo {
-	cm.lock.RLock()
-	defer cm.lock.RUnlock()
-	return cm.gasSettings[network.GetChainID()]
+func (wm *WalletManager) getGasSettingInfo(network networks.Network) *GasInfo {
+	wm.lock.RLock()
+	defer wm.lock.RUnlock()
+	return wm.gasSettings[network.GetChainID()]
 }
 
-func (cm *ContextManager) setGasInfo(network networks.Network, info *GasInfo) {
-	cm.lock.Lock()
-	defer cm.lock.Unlock()
-	cm.gasSettings[network.GetChainID()] = info
+func (wm *WalletManager) setGasInfo(network networks.Network, info *GasInfo) {
+	wm.lock.Lock()
+	defer wm.lock.Unlock()
+	wm.gasSettings[network.GetChainID()] = info
 }
 
 // implement a cache mechanism to be more efficient
-func (cm *ContextManager) GasSetting(network networks.Network) (*GasInfo, error) {
-	gasInfo := cm.getGasSettingInfo(network)
+func (wm *WalletManager) GasSetting(network networks.Network) (*GasInfo, error) {
+	gasInfo := wm.getGasSettingInfo(network)
 	if gasInfo == nil || time.Since(gasInfo.Timestamp) >= GAS_INFO_TTL {
 		// gasInfo is not initiated or outdated
-		reader := cm.Reader(network)
+		reader := wm.Reader(network)
 		gasPrice, gasTipCapGwei, err := reader.SuggestedGasSettings()
 		if err != nil {
 			return nil, fmt.Errorf("couldn't get gas settings in context manager: %w", err)
@@ -376,72 +376,13 @@ func (cm *ContextManager) GasSetting(network networks.Network) (*GasInfo, error)
 			FeePerGas:        gasPrice,
 			Timestamp:        time.Now(),
 		}
-		cm.setGasInfo(network, &info)
+		wm.setGasInfo(network, &info)
 		return &info, nil
 	}
-	return cm.getGasSettingInfo(network), nil
+	return wm.getGasSettingInfo(network), nil
 }
 
-// BuildSendAllNativeTx builds a transaction to send all native tokens to the given address
-// this function will use legacy transaction type to ensure there is not dusk left after the tx
-// func (cm *ContextManager) buildSendAllNativeTx(
-// 	from, to common.Address,
-// 	nonce *big.Int,
-// 	gasPrice float64,
-// 	tipCapGwei float64,
-// 	network networks.Network,
-// ) (tx *types.Transaction, err error) {
-// 	gasLimit := 21000
-//
-// 	if nonce == nil {
-// 		nonce, err = cm.nonce(from, network)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err)
-// 		}
-// 	}
-//
-// 	if gasPrice == 0 {
-// 		gasInfo, err := cm.GasSetting(network)
-// 		if err != nil {
-// 			return nil, fmt.Errorf("couldn't get gas price info from any nodes: %w", err)
-// 		}
-// 		gasPrice = gasInfo.GasPrice
-// 	}
-//
-// 	balance, err := cm.Reader(network).GetBalance(from.Hex())
-// 	if err != nil {
-// 		return nil, fmt.Errorf("couldn't get balance of the wallet from any nodes: %w", err)
-// 	}
-//
-// 	// amount to send = balance - gasLimit * gasPrice * 10^9
-// 	amountToSend := big.NewInt(0).Sub(
-// 		balance,
-// 		big.NewInt(0).Mul(
-// 			big.NewInt(int64(gasLimit)),
-// 			jarviscommon.GweiToWei(gasPrice),
-// 		),
-// 	)
-//
-// 	amountToSend = big.NewInt(0).Sub(amountToSend, L2_GAS_OVERHEAD)
-//
-// 	if amountToSend.Cmp(big.NewInt(0)) <= 0 {
-// 		return nil, fmt.Errorf("amount to send is less than the gas overhead")
-// 	}
-//
-// 	return cm.BuildTx(
-// 		types.LegacyTxType,
-// 		from, to,
-// 		nonce,
-// 		amountToSend,
-// 		uint64(gasLimit),
-// 		gasPrice,
-// 		0,
-// 		nil,
-// 		network,
-// 	)
-// }
-
-func (cm *ContextManager) buildTx(
+func (wm *WalletManager) buildTx(
 	txType uint8,
 	from, to common.Address,
 	nonce *big.Int,
@@ -453,7 +394,7 @@ func (cm *ContextManager) buildTx(
 	network networks.Network,
 ) (tx *types.Transaction, err error) {
 	if gasLimit == 0 {
-		gasLimit, err = cm.Reader(network).EstimateExactGas(
+		gasLimit, err = wm.Reader(network).EstimateExactGas(
 			from.Hex(), to.Hex(),
 			gasPrice,
 			value,
@@ -468,14 +409,14 @@ func (cm *ContextManager) buildTx(
 	}
 
 	if nonce == nil {
-		nonce, err = cm.nonce(from, network)
+		nonce, err = wm.nonce(from, network)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err)
 		}
 	}
 
 	if gasPrice == 0 {
-		gasInfo, err := cm.GasSetting(network)
+		gasInfo, err := wm.GasSetting(network)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't get gas price info from any nodes: %w", err)
 		}
@@ -496,14 +437,14 @@ func (cm *ContextManager) buildTx(
 	), nil
 }
 
-func (cm *ContextManager) signTx(
+func (wm *WalletManager) signTx(
 	wallet common.Address,
 	tx *types.Transaction,
 	network networks.Network,
 ) (signedAddr common.Address, signedTx *types.Transaction, err error) {
-	acc := cm.Account(wallet)
+	acc := wm.Account(wallet)
 	if acc == nil {
-		acc, err = cm.UnlockAccount(wallet)
+		acc, err = wm.UnlockAccount(wallet)
 		if err != nil {
 			return common.Address{}, nil, fmt.Errorf(
 				"the wallet to sign txs is not registered in context manager",
@@ -513,12 +454,12 @@ func (cm *ContextManager) signTx(
 	return acc.SignTx(tx, big.NewInt(int64(network.GetChainID())))
 }
 
-func (cm *ContextManager) signTxAndBroadcast(
+func (wm *WalletManager) signTxAndBroadcast(
 	wallet common.Address,
 	tx *types.Transaction,
 	network networks.Network,
 ) (signedTx *types.Transaction, successful bool, err BroadcastError) {
-	signedAddr, tx, err := cm.signTx(wallet, tx, network)
+	signedAddr, tx, err := wm.signTx(wallet, tx, network)
 	if err != nil {
 		return tx, false, err
 	}
@@ -529,23 +470,23 @@ func (cm *ContextManager) signTxAndBroadcast(
 			signedAddr.Hex(),
 		)
 	}
-	_, broadcasted, allErrors := cm.broadcastTx(tx)
+	_, broadcasted, allErrors := wm.broadcastTx(tx)
 	return tx, broadcasted, allErrors
 }
 
-func (cm *ContextManager) registerBroadcastedTx(tx *types.Transaction, network networks.Network) error {
+func (wm *WalletManager) registerBroadcastedTx(tx *types.Transaction, network networks.Network) error {
 	wallet, err := jarviscommon.GetSignerAddressFromTx(tx, big.NewInt(int64(network.GetChainID())))
 	if err != nil {
 		return fmt.Errorf("couldn't derive sender from the tx data in context manager: %s", err)
 	}
 	// update nonce
-	cm.setPendingNonce(wallet, network, tx.Nonce())
+	wm.setPendingNonce(wallet, network, tx.Nonce())
 	// update txs
-	cm.setTx(wallet, network, tx)
+	wm.setTx(wallet, network, tx)
 	return nil
 }
 
-func (cm *ContextManager) broadcastTx(
+func (wm *WalletManager) broadcastTx(
 	tx *types.Transaction,
 ) (hash string, broadcasted bool, err BroadcastError) {
 	network, err := networks.GetNetworkByID(tx.ChainId().Uint64())
@@ -553,9 +494,9 @@ func (cm *ContextManager) broadcastTx(
 	if err != nil {
 		return "", false, BroadcastError(fmt.Errorf("tx is encoded with unsupported ChainID: %w", err))
 	}
-	hash, broadcasted, allErrors := cm.Broadcaster(network).BroadcastTx(tx)
+	hash, broadcasted, allErrors := wm.Broadcaster(network).BroadcastTx(tx)
 	if broadcasted {
-		cm.registerBroadcastedTx(tx, network)
+		wm.registerBroadcastedTx(tx, network)
 	}
 	return hash, broadcasted, NewBroadcastError(allErrors)
 }
@@ -565,8 +506,8 @@ func (cm *ContextManager) broadcastTx(
 //  1. "mined" if the tx is mined
 //  2. "slow" if the tx is too slow to be mined (so receiver might want to retry with higher gas price)
 //  3. other strings if the tx failed and the reason is returned by the node or other debugging error message that the node can return
-func (cm *ContextManager) MonitorTx(tx *types.Transaction, network networks.Network) <-chan string {
-	txMonitor := cm.getTxMonitor(network)
+func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Network) <-chan string {
+	txMonitor := wm.getTxMonitor(network)
 	statusChan := make(chan string)
 	monitorChan := txMonitor.MakeWaitChannel(tx.Hash().Hex())
 	go func() {
@@ -590,11 +531,11 @@ func (cm *ContextManager) MonitorTx(tx *types.Transaction, network networks.Netw
 	return statusChan
 }
 
-func (cm *ContextManager) getTxStatuses(oldTxs map[string]*types.Transaction, network networks.Network) (statuses []jarviscommon.TxInfo, err error) {
+func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, network networks.Network) (statuses []jarviscommon.TxInfo, err error) {
 	result := []jarviscommon.TxInfo{}
 
 	for _, tx := range oldTxs {
-		txInfo, _ := cm.Reader(network).TxInfoFromHash(tx.Hash().Hex())
+		txInfo, _ := wm.Reader(network).TxInfoFromHash(tx.Hash().Hex())
 		result = append(result, txInfo)
 	}
 
@@ -602,7 +543,7 @@ func (cm *ContextManager) getTxStatuses(oldTxs map[string]*types.Transaction, ne
 }
 
 // EnsureTx ensures the tx is broadcasted and mined, it will retry until the tx is mined
-func (cm *ContextManager) EnsureTx(
+func (wm *WalletManager) EnsureTx(
 	txType uint8,
 	from, to common.Address,
 	value *big.Int,
@@ -624,7 +565,7 @@ func (cm *ContextManager) EnsureTx(
 			time.Sleep(5 * time.Second)
 		}
 
-		tx, err = cm.buildTx(
+		tx, err = wm.buildTx(
 			txType,        // tx type
 			from,          // from address
 			to,            // to address
@@ -641,7 +582,7 @@ func (cm *ContextManager) EnsureTx(
 			return nil, fmt.Errorf("error building transaction: %s", err)
 		}
 
-		signexTx, successful, broadcastErr := cm.signTxAndBroadcast(from, tx, network)
+		signexTx, successful, broadcastErr := wm.signTxAndBroadcast(from, tx, network)
 
 		if signexTx != nil {
 			oldTxs[signexTx.Hash().Hex()] = signexTx
@@ -670,7 +611,7 @@ func (cm *ContextManager) EnsureTx(
 			// 2. nonce is low
 			if broadcastErr == ErrNonceIsLow {
 				// in this case, we need to check if the last transaction is mined or it is lost
-				statuses, err := cm.getTxStatuses(oldTxs, network)
+				statuses, err := wm.getTxStatuses(oldTxs, network)
 				if err != nil {
 					fmt.Printf("Error getting tx statuses in case where tx wasn't broadcasted because nonce is too low: %s. Ignore and continue the retry loop\n", err)
 					// ignore the error and retry
@@ -725,7 +666,7 @@ func (cm *ContextManager) EnsureTx(
 			)
 		}
 
-		statusChan := cm.MonitorTx(signexTx, network)
+		statusChan := wm.MonitorTx(signexTx, network)
 		status := <-statusChan
 		switch status {
 		case "mined":

@@ -33,7 +33,7 @@ func ExecuteStrategy(network networks.Network, strategy TransferStrategyFunc, pr
 	fmt.Println("Commanding the army to transfer the funds...")
 
 	// make the army context and load all of the wallets
-	cm := walletarmy.NewContextManager()
+	cm := walletarmy.NewWalletManager()
 	for _, privateKeyConfig := range privateKeyConfigs {
 		acc, err := account.NewPrivateKeyAccount(privateKeyConfig.PrivateKey)
 		if err != nil {
@@ -109,7 +109,7 @@ func main() {
 	}
 }
 
-func ParallelExecuteTransfers(cm *walletarmy.ContextManager, initialBalances []*big.Int, transfers []Transfer, privateKeyConfigs PrivateKeyConfigs, network networks.Network) error {
+func ParallelExecuteTransfers(cm *walletarmy.WalletManager, initialBalances []*big.Int, transfers []Transfer, privateKeyConfigs PrivateKeyConfigs, network networks.Network) error {
 	wg := sync.WaitGroup{}
 
 	errChan := make(chan error, len(transfers))
@@ -159,7 +159,7 @@ func ParallelExecuteTransfers(cm *walletarmy.ContextManager, initialBalances []*
 }
 
 // EnsureTransfer ensures that the transfer is executed and the transaction is mined, it is supposed to retry until the transfer is successful
-func EnsureTransfer(cm *walletarmy.ContextManager, fromPrivateKeyConfig PrivateKeyConfig, toPrivateKeyConfig PrivateKeyConfig, initialBalance *big.Int, amount *big.Int, network networks.Network) (err error) {
+func EnsureTransfer(cm *walletarmy.WalletManager, fromPrivateKeyConfig PrivateKeyConfig, toPrivateKeyConfig PrivateKeyConfig, initialBalance *big.Int, amount *big.Int, network networks.Network) (err error) {
 	var tx *types.Transaction
 
 	fromAddress := common.HexToAddress(fromPrivateKeyConfig.Address)
