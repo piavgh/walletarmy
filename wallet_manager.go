@@ -1,6 +1,7 @@
 package walletarmy
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -9,7 +10,6 @@ import (
 	"github.com/KyberNetwork/logger"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-
 	"github.com/tranvictor/jarvis/accounts"
 	jarviscommon "github.com/tranvictor/jarvis/common"
 	"github.com/tranvictor/jarvis/networks"
@@ -19,6 +19,13 @@ import (
 	"github.com/tranvictor/jarvis/util/broadcaster"
 	"github.com/tranvictor/jarvis/util/monitor"
 	"github.com/tranvictor/jarvis/util/reader"
+)
+
+var (
+	ErrEstimateGasFailed    = fmt.Errorf("estimate gas failed")
+	ErrAcquireNonceFailed   = fmt.Errorf("acquire nonce failed")
+	ErrGetGasSettingFailed  = fmt.Errorf("get gas setting failed")
+	ErrEnsureTxOutOfRetries = fmt.Errorf("ensure tx out of retries")
 )
 
 // WalletManager manages
@@ -393,24 +400,21 @@ func (wm *WalletManager) buildTx(
 			data,
 		)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"couldn't estimate gas. The tx is meant to revert or network error. Detail: %w",
-				err,
-			)
+			return nil, errors.Join(ErrEstimateGasFailed, fmt.Errorf("couldn't estimate gas. The tx is meant to revert or network error. Detail: %w", err))
 		}
 	}
 
 	if nonce == nil {
 		nonce, err = wm.nonce(from, network)
 		if err != nil {
-			return nil, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err)
+			return nil, errors.Join(ErrAcquireNonceFailed, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err))
 		}
 	}
 
 	if gasPrice == 0 {
 		gasInfo, err := wm.GasSetting(network)
 		if err != nil {
-			return nil, fmt.Errorf("couldn't get gas price info from any nodes: %w", err)
+			return nil, errors.Join(ErrGetGasSettingFailed, fmt.Errorf("couldn't get gas price info from any nodes: %w", err))
 		}
 		gasPrice = gasInfo.GasPrice
 		tipCapGwei = gasInfo.MaxPriorityPrice
@@ -540,6 +544,13 @@ func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, net
 //  2. the tx couldn't be broadcasted and get mined after 10 retries
 //
 // It always returns the tx that was mined, either if the tx was successful or reverted
+// Possible errors:
+//  1. ErrEstimateGasFailed
+//  2. ErrAcquireNonceFailed
+//  3. ErrGetGasSettingFailed
+//  4. ErrEnsureTxOutOfRetries
+//
+// If the caller wants to know the reason of the error, they can use errors.Is to check if the error is one of the above
 func (wm *WalletManager) EnsureTx(
 	txType uint8,
 	from, to common.Address,
@@ -576,7 +587,7 @@ func (wm *WalletManager) EnsureTx(
 		)
 
 		if err != nil {
-			return nil, fmt.Errorf("error building transaction: %s", err)
+			return nil, fmt.Errorf("error building transaction: %w", err)
 		}
 
 		signexTx, successful, broadcastErr := wm.signTxAndBroadcast(from, tx, network)
@@ -680,5 +691,5 @@ func (wm *WalletManager) EnsureTx(
 		}
 	}
 
-	return nil, fmt.Errorf("failed to ensure tx is mined after all retries")
+	return nil, ErrEnsureTxOutOfRetries
 }

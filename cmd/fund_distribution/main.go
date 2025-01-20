@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
-
 	"github.com/tranvictor/jarvis/common"
 	"github.com/tranvictor/jarvis/networks"
 	"github.com/tranvictor/jarvis/util"
 	"github.com/tranvictor/jarvis/util/account"
+
 	"github.com/tranvictor/walletarmy"
 )
 
