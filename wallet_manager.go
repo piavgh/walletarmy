@@ -550,8 +550,17 @@ func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, net
 //  3. ErrGetGasSettingFailed
 //  4. ErrEnsureTxOutOfRetries
 //
-// If the caller wants to know the reason of the error, they can use errors.Is to check if the error is one of the above
-func (wm *WalletManager) EnsureTx(
+// # If the caller wants to know the reason of the error, they can use errors.Is to check if the error is one of the above
+//
+// After building the tx and before signing and broadcasting, the caller can provide a function hook to receive the tx and building error,
+// if the hook returns an error, the process will be stopped and the error will be returned. If the hook returns nil, the process will continue
+// even if the tx building failed, in this case, it will retry with the same data up to 10 times and the hook will be called again.
+//
+// After signing and broadcasting successfully, the caller can provide a function hook to receive the signed tx and broadcast error,
+// if the hook returns an error, the process will be stopped and the error will be returned. If the hook returns nil, the process will continue
+// to monitor the tx to see if the tx is mined or not. If the tx is not mined, the process will retry either with a new nonce or with higher gas
+// price and tip cap to ensure the tx is mined. Hooks will be called again in the retry process.
+func (wm *WalletManager) EnsureTxWithHooks(
 	txType uint8,
 	from, to common.Address,
 	value *big.Int,
@@ -560,6 +569,8 @@ func (wm *WalletManager) EnsureTx(
 	tipCapGwei float64,
 	data []byte,
 	network networks.Network,
+	beforeSignAndBroadcastHook Hook,
+	afterSignAndBroadcastHook Hook,
 ) (tx *types.Transaction, err error) {
 	var oldTxs map[string]*types.Transaction = map[string]*types.Transaction{}
 	var retryNonce *big.Int
@@ -586,8 +597,18 @@ func (wm *WalletManager) EnsureTx(
 			network,       // network
 		)
 
-		if err != nil {
-			return nil, fmt.Errorf("error building transaction: %w", err)
+		if beforeSignAndBroadcastHook != nil {
+			hookError := beforeSignAndBroadcastHook(tx, err)
+			if hookError != nil {
+				return nil, fmt.Errorf("after tx building and before signing and broadcasting hook error: %w", hookError)
+			} else if tx == nil {
+				logger.WithFields(logger.Fields{
+					"nonce": retryNonce,
+					"error": err,
+				}).Debug("Failed to build transaction and hook didn't return any errors. Will retry")
+
+				continue
+			}
 		}
 
 		signexTx, successful, broadcastErr := wm.signTxAndBroadcast(from, tx, network)
@@ -667,6 +688,13 @@ func (wm *WalletManager) EnsureTx(
 				"tip_cap":         tx.GasTipCap().String(),
 				"max_fee_per_gas": tx.GasFeeCap().String(),
 			}).Info("Signed and broadcasted transaction")
+
+			if afterSignAndBroadcastHook != nil {
+				hookError := afterSignAndBroadcastHook(signexTx, broadcastErr)
+				if hookError != nil {
+					return nil, fmt.Errorf("after signing and broadcasting hook error: %w", hookError)
+				}
+			}
 		}
 
 		statusChan := wm.MonitorTx(signexTx, network)
@@ -692,4 +720,17 @@ func (wm *WalletManager) EnsureTx(
 	}
 
 	return nil, ErrEnsureTxOutOfRetries
+}
+
+func (wm *WalletManager) EnsureTx(
+	txType uint8,
+	from, to common.Address,
+	value *big.Int,
+	gasLimit uint64,
+	gasPrice float64,
+	tipCapGwei float64,
+	data []byte,
+	network networks.Network,
+) (tx *types.Transaction, err error) {
+	return wm.EnsureTxWithHooks(txType, from, to, value, gasLimit, gasPrice, tipCapGwei, data, network, nil, nil)
 }
