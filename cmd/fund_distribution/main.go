@@ -188,7 +188,10 @@ func EnsureTransfer(cm *walletarmy.WalletManager, fromPrivateKeyConfig PrivateKe
 			fromAddress, toAddress,
 			amountAfterGas,
 			21000,
+			0,
 			gasPrice,
+			0,
+			0,
 			0,
 			nil,
 			network,
@@ -199,8 +202,11 @@ func EnsureTransfer(cm *walletarmy.WalletManager, fromPrivateKeyConfig PrivateKe
 			fromAddress, toAddress,
 			amount,  // amount
 			0,       // gas limit
+			0,       // extra gas limit
 			0,       // gas price
+			0,       // extra gas price
 			0,       // tip cap
+			0,       // extra tip cap
 			nil,     // data
 			network, // network
 		)

@@ -387,8 +387,11 @@ func (wm *WalletManager) buildTx(
 	nonce *big.Int,
 	value *big.Int,
 	gasLimit uint64,
+	extraGasLimit uint64,
 	gasPrice float64,
+	extraGasPrice float64,
 	tipCapGwei float64,
+	extraTipCapGwei float64,
 	data []byte,
 	network networks.Network,
 ) (tx *types.Transaction, err error) {
@@ -425,9 +428,9 @@ func (wm *WalletManager) buildTx(
 		nonce.Uint64(),
 		to.Hex(),
 		value,
-		gasLimit,
-		gasPrice,
-		tipCapGwei,
+		gasLimit+extraGasLimit,
+		gasPrice+extraGasPrice,
+		tipCapGwei+extraTipCapGwei,
 		data,
 		network.GetChainID(),
 	), nil
@@ -564,9 +567,9 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	txType uint8,
 	from, to common.Address,
 	value *big.Int,
-	gasLimit uint64,
-	gasPrice float64,
-	tipCapGwei float64,
+	gasLimit uint64, extraGasLimit uint64,
+	gasPrice float64, extraGasPrice float64,
+	tipCapGwei float64, extraTipCapGwei float64,
 	data []byte,
 	network networks.Network,
 	beforeSignAndBroadcastHook Hook,
@@ -576,50 +579,97 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	var retryNonce *big.Int
 	var retryGasPrice float64 = gasPrice
 	var retryTipCap float64 = tipCapGwei
+	var signedTx *types.Transaction
 
 	// retry loop for at max 10 times
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		// always sleep for 5 seconds before retrying
 		if i > 0 {
 			time.Sleep(5 * time.Second)
 		}
 
 		tx, err = wm.buildTx(
-			txType,        // tx type
-			from,          // from address
-			to,            // to address
-			retryNonce,    // nonce (if nil means context manager will determine the nonce)
-			value,         // amount
-			gasLimit,      // gas limit
-			retryGasPrice, // gas price
-			retryTipCap,   // tip cap
-			data,          // data
-			network,       // network
+			txType,          // tx type
+			from,            // from address
+			to,              // to address
+			retryNonce,      // nonce (if nil means context manager will determine the nonce)
+			value,           // amount
+			gasLimit,        // gas limit
+			extraGasLimit,   // extra gas limit
+			retryGasPrice,   // gas price
+			extraGasPrice,   // extra gas price
+			retryTipCap,     // tip cap
+			extraTipCapGwei, // extra tip cap
+			data,            // data
+			network,         // network
 		)
 
-		if beforeSignAndBroadcastHook != nil {
-			hookError := beforeSignAndBroadcastHook(tx, err)
-			if hookError != nil {
-				return nil, fmt.Errorf("after tx building and before signing and broadcasting hook error: %w", hookError)
-			} else if tx == nil {
-				logger.WithFields(logger.Fields{
-					"nonce": retryNonce,
-					"error": err,
-				}).Debug("Failed to build transaction and hook didn't return any errors. Will retry")
+		var successful bool
+		var broadcastErr BroadcastError
 
-				continue
+		if errors.Is(err, ErrEstimateGasFailed) {
+			// there is a chance that all of the nodes returned errors but one of them accepted the tx
+			// making the tx being broadcasted successfully. In this case, the last iteration will continue
+			// and the tx might not be able to build successfully because the Gas estimation might revert.
+			// we should check the tx status of all signedTx.
+
+			statuses, err := wm.getTxStatuses(oldTxs, network)
+			if err != nil {
+				logger.WithFields(logger.Fields{
+					"error": err,
+				}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
+				// ignore the error and retry
+				// we do nothing and continue the loop
+			} else {
+				// if it is mined, we don't need to do anything, just stop the loop and return
+				for txhash, status := range statuses {
+					if status.Status == "done" || status.Status == "reverted" {
+						return oldTxs[txhash], nil
+					}
+				}
+
+				// there is no done or reverted tx, we check to see all pennding txs and get the one
+				// with the highest gas price
+				highestGasPrice := big.NewInt(0)
+				for txhash, status := range statuses {
+					if status.Status == "pending" {
+						if oldTxs[txhash].GasPrice().Cmp(highestGasPrice) > 0 {
+							highestGasPrice = oldTxs[txhash].GasPrice()
+							signedTx = oldTxs[txhash]
+							successful = true
+							broadcastErr = nil
+						}
+					}
+				}
 			}
 		}
 
-		signexTx, successful, broadcastErr := wm.signTxAndBroadcast(from, tx, network)
+		if signedTx == nil {
+			// if in the above process, we didn't find any pending tx for the task, we proceed to
+			// normal process
+			if beforeSignAndBroadcastHook != nil {
+				hookError := beforeSignAndBroadcastHook(tx, err)
+				if hookError != nil {
+					return nil, fmt.Errorf("after tx building and before signing and broadcasting hook error: %w", hookError)
+				} else if tx == nil {
+					logger.WithFields(logger.Fields{
+						"nonce": retryNonce,
+						"error": err,
+					}).Debug("Failed to build transaction and hook didn't return any errors. Will retry")
 
-		if signexTx != nil {
-			oldTxs[signexTx.Hash().Hex()] = signexTx
+					continue
+				}
+			}
+			signedTx, successful, broadcastErr = wm.signTxAndBroadcast(from, tx, network)
+		}
+
+		if signedTx != nil {
+			oldTxs[signedTx.Hash().Hex()] = signedTx
 		}
 
 		if !successful {
 			logger.WithFields(logger.Fields{
-				"tx_hash":         signexTx.Hash().Hex(),
+				"tx_hash":         signedTx.Hash().Hex(),
 				"nonce":           tx.Nonce(),
 				"gas_price":       tx.GasPrice().String(),
 				"tip_cap":         tx.GasTipCap().String(),
@@ -682,7 +732,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 			continue
 		} else {
 			logger.WithFields(logger.Fields{
-				"tx_hash":         signexTx.Hash().Hex(),
+				"tx_hash":         signedTx.Hash().Hex(),
 				"nonce":           tx.Nonce(),
 				"gas_price":       tx.GasPrice().String(),
 				"tip_cap":         tx.GasTipCap().String(),
@@ -690,30 +740,30 @@ func (wm *WalletManager) EnsureTxWithHooks(
 			}).Info("Signed and broadcasted transaction")
 
 			if afterSignAndBroadcastHook != nil {
-				hookError := afterSignAndBroadcastHook(signexTx, broadcastErr)
+				hookError := afterSignAndBroadcastHook(signedTx, broadcastErr)
 				if hookError != nil {
-					return nil, fmt.Errorf("after signing and broadcasting hook error: %w", hookError)
+					return signedTx, fmt.Errorf("after signing and broadcasting hook error: %w", hookError)
 				}
 			}
 		}
 
-		statusChan := wm.MonitorTx(signexTx, network)
+		statusChan := wm.MonitorTx(signedTx, network)
 		status := <-statusChan
 		switch status {
 		case "mined", "reverted":
-			return signexTx, nil
+			return signedTx, nil
 		case "lost":
 			logger.WithFields(logger.Fields{
-				"tx_hash": signexTx.Hash().Hex(),
+				"tx_hash": signedTx.Hash().Hex(),
 			}).Info("Transaction lost, retrying...")
 			retryNonce = nil
 			time.Sleep(5 * time.Second)
 		case "slow":
 			logger.WithFields(logger.Fields{
-				"tx_hash": signexTx.Hash().Hex(),
+				"tx_hash": signedTx.Hash().Hex(),
 			}).Info("Transaction slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...")
-			retryGasPrice = jarviscommon.BigToFloat(tx.GasPrice(), 9) * 1.2
-			retryTipCap = jarviscommon.BigToFloat(tx.GasTipCap(), 9) * 1.1
+			retryGasPrice = jarviscommon.BigToFloat(tx.GasPrice(), 9)*1.2 - extraGasPrice
+			retryTipCap = jarviscommon.BigToFloat(tx.GasTipCap(), 9)*1.1 - extraTipCapGwei
 			retryNonce = big.NewInt(int64(tx.Nonce()))
 			time.Sleep(5 * time.Second)
 		}
@@ -727,10 +777,25 @@ func (wm *WalletManager) EnsureTx(
 	from, to common.Address,
 	value *big.Int,
 	gasLimit uint64,
+	extraGasLimit uint64,
 	gasPrice float64,
+	extraGasPrice float64,
 	tipCapGwei float64,
+	extraTipCapGwei float64,
 	data []byte,
 	network networks.Network,
 ) (tx *types.Transaction, err error) {
-	return wm.EnsureTxWithHooks(txType, from, to, value, gasLimit, gasPrice, tipCapGwei, data, network, nil, nil)
+	return wm.EnsureTxWithHooks(
+		txType,
+		from,
+		to,
+		value,
+		gasLimit, extraGasLimit,
+		gasPrice, extraGasPrice,
+		tipCapGwei, extraTipCapGwei,
+		data,
+		network,
+		nil,
+		nil,
+	)
 }
