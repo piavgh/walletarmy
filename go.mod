@@ -3,7 +3,7 @@ module github.com/tranvictor/walletarmy
 go 1.23.2
 
 require (
-	github.com/KyberNetwork/logger v0.2.1
+	github.com/KyberNetwork/logger v1.0.3
 	github.com/ethereum/go-ethereum v1.14.12
 	github.com/tranvictor/jarvis v0.0.32
 )

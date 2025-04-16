@@ -395,6 +395,8 @@ func (wm *WalletManager) buildTx(
 	data []byte,
 	network networks.Network,
 ) (tx *types.Transaction, err error) {
+	logger.Infof("Start buildTx: txType: %d, from: %s, to: %s, nonce: %s, value: %s, gasLimit: %d, extraGasLimit: %d, gasPrice: %f, extraGasPrice: %f, tipCapGwei: %f, extraTipCapGwei: %f, data: %v, network: %s", txType, from.Hex(), to.Hex(), nonce, value, gasLimit, extraGasLimit, gasPrice, extraGasPrice, tipCapGwei, extraTipCapGwei, data, network)
+
 	if gasLimit == 0 {
 		gasLimit, err = wm.Reader(network).EstimateExactGas(
 			from.Hex(), to.Hex(),
@@ -407,12 +409,16 @@ func (wm *WalletManager) buildTx(
 		}
 	}
 
+	logger.Infof("Gas limit: %v", gasLimit)
+
 	if nonce == nil {
 		nonce, err = wm.nonce(from, network)
 		if err != nil {
 			return nil, errors.Join(ErrAcquireNonceFailed, fmt.Errorf("couldn't get nonce of the wallet from any nodes: %w", err))
 		}
 	}
+
+	logger.Infof("Nonce: %v", nonce.String())
 
 	if gasPrice == 0 {
 		gasInfo, err := wm.GasSetting(network)
@@ -422,6 +428,9 @@ func (wm *WalletManager) buildTx(
 		gasPrice = gasInfo.GasPrice
 		tipCapGwei = gasInfo.MaxPriorityPrice
 	}
+
+	logger.Infof("Gas price: %v", gasPrice)
+	logger.Infof("Tip cap: %v", tipCapGwei)
 
 	tx = jarviscommon.BuildExactTx(
 		txType,
