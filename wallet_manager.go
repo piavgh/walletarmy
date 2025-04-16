@@ -423,7 +423,7 @@ func (wm *WalletManager) buildTx(
 		tipCapGwei = gasInfo.MaxPriorityPrice
 	}
 
-	return jarviscommon.BuildExactTx(
+	tx = jarviscommon.BuildExactTx(
 		txType,
 		nonce.Uint64(),
 		to.Hex(),
@@ -433,7 +433,11 @@ func (wm *WalletManager) buildTx(
 		tipCapGwei+extraTipCapGwei,
 		data,
 		network.GetChainID(),
-	), nil
+	)
+
+	logger.Infof("BuildExactTx tx: %+v", tx)
+
+	return tx, nil
 }
 
 func (wm *WalletManager) signTx(
