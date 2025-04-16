@@ -644,6 +644,11 @@ func (wm *WalletManager) EnsureTxWithHooks(
 			}
 		}
 
+		// If tx is nil because estimate gas failed, we skip the current iteration
+		if tx == nil {
+			continue
+		}
+
 		if signedTx == nil {
 			// if in the above process, we didn't find any pending tx for the task, we proceed to
 			// normal process
