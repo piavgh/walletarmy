@@ -395,7 +395,7 @@ func (wm *WalletManager) buildTx(
 	data []byte,
 	network networks.Network,
 ) (tx *types.Transaction, err error) {
-	logger.Warnf("Start buildTx: txType: %d, from: %s, to: %s, nonce: %s, value: %s, gasLimit: %d, extraGasLimit: %d, gasPrice: %f, extraGasPrice: %f, tipCapGwei: %f, extraTipCapGwei: %f, data: %v, network: %s", txType, from.Hex(), to.Hex(), nonce, value, gasLimit, extraGasLimit, gasPrice, extraGasPrice, tipCapGwei, extraTipCapGwei, data, network)
+	logger.Warnf("[debug panic] Start buildTx: txType: %d, from: %s, to: %s, nonce: %s, value: %s, gasLimit: %d, extraGasLimit: %d, gasPrice: %f, extraGasPrice: %f, tipCapGwei: %f, extraTipCapGwei: %f, data: %v, network: %s", txType, from.Hex(), to.Hex(), nonce, value, gasLimit, extraGasLimit, gasPrice, extraGasPrice, tipCapGwei, extraTipCapGwei, data, network)
 
 	if gasLimit == 0 {
 		gasLimit, err = wm.Reader(network).EstimateExactGas(
@@ -409,7 +409,7 @@ func (wm *WalletManager) buildTx(
 		}
 	}
 
-	logger.Warnf("Gas limit: %v", gasLimit)
+	logger.Warnf("[debug panic] Gas limit: %v", gasLimit)
 
 	if nonce == nil {
 		nonce, err = wm.nonce(from, network)
@@ -418,7 +418,7 @@ func (wm *WalletManager) buildTx(
 		}
 	}
 
-	logger.Warnf("Nonce: %v", nonce.String())
+	logger.Warnf("[debug panic] Nonce: %v", nonce.String())
 
 	if gasPrice == 0 {
 		gasInfo, err := wm.GasSetting(network)
@@ -429,8 +429,8 @@ func (wm *WalletManager) buildTx(
 		tipCapGwei = gasInfo.MaxPriorityPrice
 	}
 
-	logger.Warnf("Gas price: %v", gasPrice)
-	logger.Warnf("Tip cap: %v", tipCapGwei)
+	logger.Warnf("[debug panic] Gas price: %v", gasPrice)
+	logger.Warnf("[debug panic] Tip cap: %v", tipCapGwei)
 
 	tx = jarviscommon.BuildExactTx(
 		txType,
@@ -444,7 +444,7 @@ func (wm *WalletManager) buildTx(
 		network.GetChainID(),
 	)
 
-	logger.Warnf("BuildExactTx tx: %+v", tx)
+	logger.Warnf("[debug panic] BuildExactTx tx: %+v", tx)
 
 	return tx, nil
 }
@@ -617,23 +617,29 @@ func (wm *WalletManager) EnsureTxWithHooks(
 			network,         // network
 		)
 
+		logger.Warnf("[debug panic] tx in EnsureTxWithHooks: %+v, error: %+v", tx, err)
+
 		var successful bool
 		var broadcastErr BroadcastError
 
 		if errors.Is(err, ErrEstimateGasFailed) {
+			logger.Warnf("[debug panic] error is ErrEstimateGasFailed: %+v", err)
 			// there is a chance that all of the nodes returned errors but one of them accepted the tx
 			// making the tx being broadcasted successfully. In this case, the last iteration will continue
 			// and the tx might not be able to build successfully because the Gas estimation might revert.
 			// we should check the tx status of all signedTx.
 
+			logger.Warnf("[debug panic] oldTxs: %+v", oldTxs)
+
 			statuses, err := wm.getTxStatuses(oldTxs, network)
 			if err != nil {
 				logger.WithFields(logger.Fields{
 					"error": err,
-				}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
+				}).Warn("[debug panic] Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
 				// ignore the error and retry
 				// we do nothing and continue the loop
 			} else {
+				logger.Warnf("[debug panic] statuses: %+v", statuses)
 				// if it is mined, we don't need to do anything, just stop the loop and return
 				for txhash, status := range statuses {
 					if status.Status == "done" || status.Status == "reverted" {
@@ -668,7 +674,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 					logger.WithFields(logger.Fields{
 						"nonce": retryNonce,
 						"error": err,
-					}).Debug("Failed to build transaction and hook didn't return any errors. Will retry")
+					}).Warn("[debug panic] Failed to build transaction and hook didn't return any errors. Will retry")
 
 					continue
 				}
@@ -688,7 +694,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				"tip_cap":         tx.GasTipCap().String(),
 				"max_fee_per_gas": tx.GasFeeCap().String(),
 				"error":           broadcastErr,
-			}).Debug("Unsuccessful signing and broadcasting transaction")
+			}).Warn("[debug panic] Unsuccessful signing and broadcasting transaction")
 
 			// there are a few cases we should handle
 			// 1. insufficient fund
@@ -706,7 +712,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				if err != nil {
 					logger.WithFields(logger.Fields{
 						"error": err,
-					}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
+					}).Warn("[debug panic] Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
 					// ignore the error and retry
 					continue
 				}
@@ -750,7 +756,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				"gas_price":       tx.GasPrice().String(),
 				"tip_cap":         tx.GasTipCap().String(),
 				"max_fee_per_gas": tx.GasFeeCap().String(),
-			}).Info("Signed and broadcasted transaction")
+			}).Warn("[debug panic] Signed and broadcasted transaction")
 
 			if afterSignAndBroadcastHook != nil {
 				hookError := afterSignAndBroadcastHook(signedTx, broadcastErr)
@@ -768,13 +774,13 @@ func (wm *WalletManager) EnsureTxWithHooks(
 		case "lost":
 			logger.WithFields(logger.Fields{
 				"tx_hash": signedTx.Hash().Hex(),
-			}).Info("Transaction lost, retrying...")
+			}).Warn("[debug panic] Transaction lost, retrying...")
 			retryNonce = nil
 			time.Sleep(5 * time.Second)
 		case "slow":
 			logger.WithFields(logger.Fields{
 				"tx_hash": signedTx.Hash().Hex(),
-			}).Info("Transaction slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...")
+			}).Warn("[debug panic] Transaction slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...")
 			retryGasPrice = jarviscommon.BigToFloat(tx.GasPrice(), 9)*1.2 - extraGasPrice
 			retryTipCap = jarviscommon.BigToFloat(tx.GasTipCap(), 9)*1.1 - extraTipCapGwei
 			retryNonce = big.NewInt(int64(tx.Nonce()))
