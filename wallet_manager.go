@@ -680,11 +680,15 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				}
 			}
 			signedTx, successful, broadcastErr = wm.signTxAndBroadcast(from, tx, network)
+
+			logger.Warnf("[debug panic] I guess it can not run here")
 		}
 
 		if signedTx != nil {
 			oldTxs[signedTx.Hash().Hex()] = signedTx
 		}
+
+		logger.Warnf("[debug panic] signedTx: %+v, successful: %v, broadcastErr: %+v", signedTx, successful, broadcastErr)
 
 		if !successful {
 			logger.WithFields(logger.Fields{
