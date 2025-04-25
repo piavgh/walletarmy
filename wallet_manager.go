@@ -774,7 +774,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 		}
 	}
 
-	return nil, ErrEnsureTxOutOfRetries
+	return nil, errors.Join(ErrEnsureTxOutOfRetries, err)
 }
 
 func (wm *WalletManager) EnsureTx(
