@@ -21,6 +21,11 @@ import (
 	"github.com/tranvictor/jarvis/util/reader"
 )
 
+const (
+	DefaultNumRetries    = 9
+	DefaultSleepDuration = 5 * time.Second
+)
+
 var (
 	ErrEstimateGasFailed    = fmt.Errorf("estimate gas failed")
 	ErrAcquireNonceFailed   = fmt.Errorf("acquire nonce failed")
@@ -564,6 +569,8 @@ func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, net
 // to monitor the tx to see if the tx is mined or not. If the tx is not mined, the process will retry either with a new nonce or with higher gas
 // price and tip cap to ensure the tx is mined. Hooks will be called again in the retry process.
 func (wm *WalletManager) EnsureTxWithHooks(
+	numRetries int,
+	sleepDuration time.Duration,
 	txType uint8,
 	from, to common.Address,
 	value *big.Int,
@@ -575,17 +582,22 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	beforeSignAndBroadcastHook Hook,
 	afterSignAndBroadcastHook Hook,
 ) (tx *types.Transaction, err error) {
+	// set default values for sleepDuration if not provided
+	if sleepDuration == 0 {
+		sleepDuration = DefaultSleepDuration
+	}
+
 	var oldTxs map[string]*types.Transaction = map[string]*types.Transaction{}
 	var retryNonce *big.Int
 	var retryGasPrice float64 = gasPrice
 	var retryTipCap float64 = tipCapGwei
 	var signedTx *types.Transaction
 
-	// retry loop for at max 10 times
-	for i := range 10 {
-		// always sleep for 5 seconds before retrying
+	// Always run at least once (initial attempt) + numRetries additional attempts
+	for i := range numRetries + 1 {
+		// always sleep for sleepDuration before retrying
 		if i > 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(sleepDuration)
 		}
 
 		tx, err = wm.buildTx(
@@ -791,6 +803,8 @@ func (wm *WalletManager) EnsureTx(
 	network networks.Network,
 ) (tx *types.Transaction, err error) {
 	return wm.EnsureTxWithHooks(
+		DefaultNumRetries,
+		DefaultSleepDuration,
 		txType,
 		from,
 		to,
