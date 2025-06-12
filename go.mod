@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/KyberNetwork/logger v0.2.1
 	github.com/ethereum/go-ethereum v1.14.12
+	github.com/stretchr/testify v1.9.0
 	github.com/tranvictor/jarvis v0.0.32
 )
 
@@ -28,6 +29,7 @@ require (
 	github.com/couchbase/vellum v1.0.2 // indirect
 	github.com/crate-crypto/go-ipa v0.0.0-20240223125850-b1e8a79f509c // indirect
 	github.com/crate-crypto/go-kzg-4844 v1.0.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.1.0 // indirect
 	github.com/ethereum/c-kzg-4844 v1.0.0 // indirect
@@ -46,6 +48,7 @@ require (
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/openconfig/goyang v0.2.4 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/sahilm/fuzzy v0.1.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
@@ -66,5 +69,6 @@ require (
 	golang.org/x/term v0.28.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
