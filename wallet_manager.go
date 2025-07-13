@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/KyberNetwork/logger"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/tranvictor/jarvis/accounts"
@@ -517,14 +518,15 @@ func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Netwo
 	go func() {
 		select {
 		case status := <-monitorChan:
-			if status.Status == "done" {
+			switch status.Status {
+			case "done":
 				statusChan <- "mined"
-			} else if status.Status == "reverted" {
+			case "reverted":
 				// TODO: analyze to see what is the reason
 				statusChan <- "reverted"
-			} else if status.Status == "lost" {
+			case "lost":
 				statusChan <- "lost"
-			} else {
+			default:
 				// ignore other statuses
 			}
 		case <-time.After(10 * time.Second):
@@ -581,10 +583,23 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	network networks.Network,
 	beforeSignAndBroadcastHook Hook,
 	afterSignAndBroadcastHook Hook,
+	abis []abi.ABI,
+	gasEstimationFailedHook GasEstimationFailedHook,
 ) (tx *types.Transaction, err error) {
 	// set default values for sleepDuration if not provided
 	if sleepDuration == 0 {
 		sleepDuration = DefaultSleepDuration
+	}
+
+	var errDecoder *ErrorDecoder
+
+	if len(abis) > 0 {
+		errDecoder, err = NewErrorDecoder(abis...)
+		if err != nil {
+			logger.WithFields(logger.Fields{
+				"error": err,
+			}).Error("Failed to create error decoder. Ignore and continue")
+		}
 	}
 
 	var oldTxs map[string]*types.Transaction = map[string]*types.Transaction{}
@@ -640,7 +655,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 					}
 				}
 
-				// there is no done or reverted tx, we check to see all pennding txs and get the one
+				// there is no done or reverted tx, we check to see all pending txs and get the one
 				// with the highest gas price
 				highestGasPrice := big.NewInt(0)
 				for txhash, status := range statuses {
@@ -658,6 +673,18 @@ func (wm *WalletManager) EnsureTxWithHooks(
 
 		// If tx is nil because estimate gas failed, we skip the current iteration
 		if tx == nil {
+			if errDecoder != nil && gasEstimationFailedHook != nil {
+				revertMsgErr := errDecoder.Decode(err)
+				hookGasLimit, hookErr := gasEstimationFailedHook(tx, revertMsgErr, err)
+				if hookErr != nil {
+					// when the hook returns an error, we stop the loop and return the error
+					return nil, hookErr
+				}
+				if hookGasLimit != nil {
+					// in case the hook returns a non-nil gas limit, we use it for the next iteration
+					gasLimit = hookGasLimit.Uint64()
+				}
+			}
 			continue
 		}
 
@@ -668,13 +695,6 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				hookError := beforeSignAndBroadcastHook(tx, err)
 				if hookError != nil {
 					return nil, fmt.Errorf("after tx building and before signing and broadcasting hook error: %w", hookError)
-				} else if tx == nil {
-					logger.WithFields(logger.Fields{
-						"nonce": retryNonce,
-						"error": err,
-					}).Debug("Failed to build transaction and hook didn't return any errors. Will retry")
-
-					continue
 				}
 			}
 			signedTx, successful, broadcastErr = wm.signTxAndBroadcast(from, tx, network)
@@ -814,6 +834,8 @@ func (wm *WalletManager) EnsureTx(
 		tipCapGwei, extraTipCapGwei,
 		data,
 		network,
+		nil,
+		nil,
 		nil,
 		nil,
 	)
