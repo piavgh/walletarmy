@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	DefaultNumRetries    = 9
-	DefaultSleepDuration = 5 * time.Second
+	DefaultNumRetries      = 9
+	DefaultSleepDuration   = 5 * time.Second
+	DefaultTxCheckInterval = 5 * time.Second
 )
 
 var (
@@ -511,10 +512,10 @@ func (wm *WalletManager) broadcastTx(
 //  1. "mined" if the tx is mined
 //  2. "slow" if the tx is too slow to be mined (so receiver might want to retry with higher gas price)
 //  3. other strings if the tx failed and the reason is returned by the node or other debugging error message that the node can return
-func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Network) <-chan string {
+func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Network, txCheckInterval time.Duration) <-chan string {
 	txMonitor := wm.getTxMonitor(network)
 	statusChan := make(chan string)
-	monitorChan := txMonitor.MakeWaitChannelWithInterval(tx.Hash().Hex(), 1*time.Second)
+	monitorChan := txMonitor.MakeWaitChannelWithInterval(tx.Hash().Hex(), txCheckInterval)
 	go func() {
 		select {
 		case status := <-monitorChan:
@@ -573,6 +574,7 @@ func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, net
 func (wm *WalletManager) EnsureTxWithHooks(
 	numRetries int,
 	sleepDuration time.Duration,
+	txCheckInterval time.Duration,
 	txType uint8,
 	from, to common.Address,
 	value *big.Int,
@@ -784,7 +786,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 			}
 		}
 
-		statusChan := wm.MonitorTx(signedTx, network)
+		statusChan := wm.MonitorTx(signedTx, network, txCheckInterval)
 		status := <-statusChan
 		switch status {
 		case "mined", "reverted":
@@ -825,6 +827,7 @@ func (wm *WalletManager) EnsureTx(
 	return wm.EnsureTxWithHooks(
 		DefaultNumRetries,
 		DefaultSleepDuration,
+		DefaultTxCheckInterval,
 		txType,
 		from,
 		to,

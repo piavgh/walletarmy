@@ -14,8 +14,9 @@ import (
 type TxRequest struct {
 	wm *WalletManager
 
-	numRetries    int
-	sleepDuration time.Duration
+	numRetries      int
+	sleepDuration   time.Duration
+	txCheckInterval time.Duration
 
 	// Transaction parameters
 	txType          uint8
@@ -55,6 +56,12 @@ func (r *TxRequest) SetNumRetries(numRetries int) *TxRequest {
 // SetSleepDuration sets the sleep duration
 func (r *TxRequest) SetSleepDuration(sleepDuration time.Duration) *TxRequest {
 	r.sleepDuration = sleepDuration
+	return r
+}
+
+// SetTxCheckInterval sets the transaction check interval
+func (r *TxRequest) SetTxCheckInterval(txCheckInterval time.Duration) *TxRequest {
+	r.txCheckInterval = txCheckInterval
 	return r
 }
 
@@ -161,6 +168,7 @@ func (r *TxRequest) Execute() (*types.Transaction, error) {
 	return r.wm.EnsureTxWithHooks(
 		r.numRetries,
 		r.sleepDuration,
+		r.txCheckInterval,
 		r.txType,
 		r.from,
 		r.to,
