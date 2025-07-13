@@ -514,7 +514,7 @@ func (wm *WalletManager) broadcastTx(
 func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Network) <-chan string {
 	txMonitor := wm.getTxMonitor(network)
 	statusChan := make(chan string)
-	monitorChan := txMonitor.MakeWaitChannel(tx.Hash().Hex())
+	monitorChan := txMonitor.MakeWaitChannelWithInterval(tx.Hash().Hex(), 1*time.Second)
 	go func() {
 		select {
 		case status := <-monitorChan:
@@ -529,7 +529,7 @@ func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Netwo
 			default:
 				// ignore other statuses
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(5 * time.Second):
 			statusChan <- "slow"
 		}
 		close(statusChan)
