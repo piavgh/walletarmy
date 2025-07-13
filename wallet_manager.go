@@ -650,8 +650,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 			} else {
 				// if it is mined, we don't need to do anything, just stop the loop and return
 				for txhash, status := range statuses {
-					switch status.Status {
-					case "done", "reverted":
+					if status.Status == "done" || status.Status == "reverted" {
 						return oldTxs[txhash], nil
 					}
 				}
@@ -660,8 +659,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				// with the highest gas price
 				highestGasPrice := big.NewInt(0)
 				for txhash, status := range statuses {
-					switch status.Status {
-					case "pending":
+					if status.Status == "pending" {
 						if oldTxs[txhash].GasPrice().Cmp(highestGasPrice) > 0 {
 							highestGasPrice = oldTxs[txhash].GasPrice()
 							signedTx = oldTxs[txhash]
@@ -738,8 +736,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 				}
 				// if it is mined, we don't need to do anything, just stop the loop and return
 				for txhash, status := range statuses {
-					switch status.Status {
-					case "done", "reverted":
+					if status.Status == "done" || status.Status == "reverted" {
 						return oldTxs[txhash], nil
 					}
 				}
