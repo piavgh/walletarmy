@@ -12,7 +12,6 @@ require (
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/RoaringBitmap/roaring v0.9.4 // indirect
-	github.com/Songmu/prompter v0.0.0-20181014095714-d227c68538bd // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/blevesearch/bleve v1.0.14 // indirect
@@ -43,11 +42,9 @@ require (
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/holiman/uint256 v1.3.1 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
-	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/karalabe/usb v0.0.2 // indirect
 	github.com/logrusorgru/aurora v2.0.3+incompatible // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/openconfig/goyang v0.2.4 // indirect
@@ -55,8 +52,6 @@ require (
 	github.com/sahilm/fuzzy v0.1.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/spf13/cobra v1.5.0 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/steveyen/gtreap v0.1.0 // indirect
 	github.com/supranational/blst v0.3.13 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 // indirect
