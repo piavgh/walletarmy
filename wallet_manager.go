@@ -26,6 +26,11 @@ const (
 	DefaultNumRetries      = 9
 	DefaultSleepDuration   = 5 * time.Second
 	DefaultTxCheckInterval = 5 * time.Second
+
+	// Gas adjustment constants
+	GasPriceIncreasePercent = 1.2 // 20% increase
+	TipCapIncreasePercent   = 1.1 // 10% increase
+	MaxCapMultiplier        = 5.0 // Multiplier for default max gas price/tip cap when not set
 )
 
 var (
@@ -33,7 +38,18 @@ var (
 	ErrAcquireNonceFailed   = fmt.Errorf("acquire nonce failed")
 	ErrGetGasSettingFailed  = fmt.Errorf("get gas setting failed")
 	ErrEnsureTxOutOfRetries = fmt.Errorf("ensure tx out of retries")
+	ErrGasPriceLimitReached = fmt.Errorf("gas price protection limit reached")
+	ErrFromAddressZero      = fmt.Errorf("from address cannot be zero")
+	ErrNetworkNil           = fmt.Errorf("network cannot be nil")
 )
+
+// TxExecutionResult represents the outcome of a transaction execution step
+type TxExecutionResult struct {
+	Transaction  *types.Transaction
+	ShouldRetry  bool
+	ShouldReturn bool
+	Error        error
+}
 
 // WalletManager manages
 //  1. multiple wallets and their informations in its
@@ -460,26 +476,6 @@ func (wm *WalletManager) signTx(
 	return acc.SignTx(tx, big.NewInt(int64(network.GetChainID())))
 }
 
-func (wm *WalletManager) signTxAndBroadcast(
-	wallet common.Address,
-	tx *types.Transaction,
-	network networks.Network,
-) (signedTx *types.Transaction, successful bool, err BroadcastError) {
-	signedAddr, tx, err := wm.signTx(wallet, tx, network)
-	if err != nil {
-		return tx, false, err
-	}
-	if signedAddr.Cmp(wallet) != 0 {
-		return tx, false, fmt.Errorf(
-			"signed from wrong address. You could use wrong hw or passphrase. Expected wallet: %s, signed wallet: %s",
-			wallet.Hex(),
-			signedAddr.Hex(),
-		)
-	}
-	_, broadcasted, allErrors := wm.broadcastTx(tx)
-	return tx, broadcasted, allErrors
-}
-
 func (wm *WalletManager) registerBroadcastedTx(tx *types.Transaction, network networks.Network) error {
 	wallet, err := jarviscommon.GetSignerAddressFromTx(tx, big.NewInt(int64(network.GetChainID())))
 	if err != nil {
@@ -505,6 +501,22 @@ func (wm *WalletManager) broadcastTx(
 		wm.registerBroadcastedTx(tx, network)
 	}
 	return hash, broadcasted, NewBroadcastError(allErrors)
+}
+
+// createErrorDecoder creates an error decoder from ABIs if available
+func (wm *WalletManager) createErrorDecoder(abis []abi.ABI) *ErrorDecoder {
+	if len(abis) == 0 {
+		return nil
+	}
+
+	errDecoder, err := NewErrorDecoder(abis...)
+	if err != nil {
+		logger.WithFields(logger.Fields{
+			"error": err,
+		}).Error("Failed to create error decoder. Ignore and continue")
+		return nil
+	}
+	return errDecoder
 }
 
 // MonitorTx non-blocking way to monitor the tx status, it returns a channel that will be closed when the tx monitoring is done
@@ -560,6 +572,7 @@ func (wm *WalletManager) getTxStatuses(oldTxs map[string]*types.Transaction, net
 //  2. ErrAcquireNonceFailed
 //  3. ErrGetGasSettingFailed
 //  4. ErrEnsureTxOutOfRetries
+//  5. ErrGasPriceLimitReached
 //
 // # If the caller wants to know the reason of the error, they can use errors.Is to check if the error is one of the above
 //
@@ -581,6 +594,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	gasLimit uint64, extraGasLimit uint64,
 	gasPrice float64, extraGasPrice float64,
 	tipCapGwei float64, extraTipCapGwei float64,
+	maxGasPrice float64, maxTipCap float64,
 	data []byte,
 	network networks.Network,
 	beforeSignAndBroadcastHook Hook,
@@ -588,227 +602,481 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	abis []abi.ABI,
 	gasEstimationFailedHook GasEstimationFailedHook,
 ) (tx *types.Transaction, err error) {
-	// set default values for sleepDuration if not provided
-	if sleepDuration == 0 {
-		sleepDuration = DefaultSleepDuration
+	// Create execution context
+	ctx, err := NewTxExecutionContext(
+		numRetries, sleepDuration, txCheckInterval,
+		txType, from, to, value,
+		gasLimit, extraGasLimit,
+		gasPrice, extraGasPrice,
+		tipCapGwei, extraTipCapGwei,
+		maxGasPrice, maxTipCap,
+		data, network,
+		beforeSignAndBroadcastHook, afterSignAndBroadcastHook,
+		abis, gasEstimationFailedHook,
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	var errDecoder *ErrorDecoder
+	// Create error decoder
+	errDecoder := wm.createErrorDecoder(abis)
 
-	if len(abis) > 0 {
-		errDecoder, err = NewErrorDecoder(abis...)
-		if err != nil {
+	// Main execution loop
+	for {
+		// Only sleep after actual retry attempts, not slow monitoring
+		if ctx.actualRetryCount > 0 {
+			time.Sleep(ctx.sleepDuration)
+		}
+
+		// Execute transaction attempt
+		result := wm.executeTransactionAttempt(ctx, errDecoder)
+		if result.ShouldReturn {
+			return result.Transaction, result.Error
+		}
+		if result.ShouldRetry {
+			continue
+		}
+
+		// Monitor and handle the transaction (only if we have a transaction to monitor)
+		if result.Transaction != nil {
+			statusChan := wm.MonitorTx(result.Transaction, ctx.network, ctx.txCheckInterval)
+
+			status := <-statusChan
+
+			result = wm.handleTransactionStatus(status, result.Transaction, ctx)
+			if result.ShouldReturn {
+				return result.Transaction, result.Error
+			}
+			if result.ShouldRetry {
+				continue
+			}
+		}
+	}
+}
+
+// executeTransactionAttempt handles building and broadcasting a single transaction attempt
+func (wm *WalletManager) executeTransactionAttempt(ctx *TxExecutionContext, errDecoder *ErrorDecoder) *TxExecutionResult {
+	// Build transaction
+	builtTx, err := wm.buildTx(
+		ctx.txType,
+		ctx.from,
+		ctx.to,
+		ctx.retryNonce,
+		ctx.value,
+		ctx.gasLimit,
+		ctx.extraGasLimit,
+		ctx.retryGasPrice,
+		ctx.extraGasPrice,
+		ctx.retryTipCap,
+		ctx.extraTipCapGwei,
+		ctx.data,
+		ctx.network,
+	)
+
+	// Handle gas estimation failure
+	if errors.Is(err, ErrEstimateGasFailed) {
+		return wm.handleGasEstimationFailure(ctx, errDecoder, err)
+	}
+
+	// If builtTx is nil, skip this iteration
+	if builtTx == nil {
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  true,
+			ShouldReturn: false,
+			Error:        nil,
+		}
+	}
+
+	// Execute hooks and broadcast
+	result := wm.signAndBroadcastTransaction(builtTx, ctx)
+
+	// If no transaction is set in result, use the built transaction
+	if result.Transaction == nil && !result.ShouldReturn {
+		result.Transaction = builtTx
+	}
+
+	return result
+}
+
+// handleGasEstimationFailure processes gas estimation failures and pending transaction checks
+func (wm *WalletManager) handleGasEstimationFailure(ctx *TxExecutionContext, errDecoder *ErrorDecoder, err error) *TxExecutionResult {
+	// Only check old transactions if we have any
+	if len(ctx.oldTxs) > 0 {
+		// Check if previous transactions might have been successful
+		statuses, statusErr := wm.getTxStatuses(ctx.oldTxs, ctx.network)
+		if statusErr != nil {
 			logger.WithFields(logger.Fields{
-				"error": err,
-			}).Error("Failed to create error decoder. Ignore and continue")
-		}
-	}
-
-	var oldTxs map[string]*types.Transaction = map[string]*types.Transaction{}
-	var retryNonce *big.Int
-	var retryGasPrice float64 = gasPrice
-	var retryTipCap float64 = tipCapGwei
-	var signedTx *types.Transaction
-
-	// Always run at least once (initial attempt) + numRetries additional attempts
-	for i := range numRetries + 1 {
-		// always sleep for sleepDuration before retrying
-		if i > 0 {
-			time.Sleep(sleepDuration)
-		}
-
-		tx, err = wm.buildTx(
-			txType,          // tx type
-			from,            // from address
-			to,              // to address
-			retryNonce,      // nonce (if nil means context manager will determine the nonce)
-			value,           // amount
-			gasLimit,        // gas limit
-			extraGasLimit,   // extra gas limit
-			retryGasPrice,   // gas price
-			extraGasPrice,   // extra gas price
-			retryTipCap,     // tip cap
-			extraTipCapGwei, // extra tip cap
-			data,            // data
-			network,         // network
-		)
-
-		var successful bool
-		var broadcastErr BroadcastError
-
-		if errors.Is(err, ErrEstimateGasFailed) {
-			// there is a chance that all of the nodes returned errors but one of them accepted the tx
-			// making the tx being broadcasted successfully. In this case, the last iteration will continue
-			// and the tx might not be able to build successfully because the Gas estimation might revert.
-			// we should check the tx status of all signedTx.
-
-			statuses, err := wm.getTxStatuses(oldTxs, network)
-			if err != nil {
-				logger.WithFields(logger.Fields{
-					"error": err,
-				}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
-				// ignore the error and retry
-				// we do nothing and continue the loop
-			} else {
-				// if it is mined, we don't need to do anything, just stop the loop and return
-				for txhash, status := range statuses {
-					if status.Status == "done" || status.Status == "reverted" {
-						return oldTxs[txhash], nil
-					}
-				}
-
-				// there is no done or reverted tx, we check to see all pending txs and get the one
-				// with the highest gas price
-				highestGasPrice := big.NewInt(0)
-				for txhash, status := range statuses {
-					if status.Status == "pending" {
-						if oldTxs[txhash].GasPrice().Cmp(highestGasPrice) > 0 {
-							highestGasPrice = oldTxs[txhash].GasPrice()
-							signedTx = oldTxs[txhash]
-							successful = true
-							broadcastErr = nil
+				"error": statusErr,
+			}).Debug("Getting tx statuses after gas estimation failure. Ignore and continue the retry loop")
+			// Don't return immediately, proceed to hook handling
+		} else {
+			// Check for completed transactions
+			for txhash, status := range statuses {
+				if status.Status == "done" || status.Status == "reverted" {
+					if tx, exists := ctx.oldTxs[txhash]; exists && tx != nil {
+						return &TxExecutionResult{
+							Transaction:  tx,
+							ShouldRetry:  false,
+							ShouldReturn: true,
+							Error:        nil,
 						}
 					}
 				}
 			}
-		}
 
-		// If tx is nil because estimate gas failed, we skip the current iteration
-		if tx == nil {
-			if errDecoder != nil && gasEstimationFailedHook != nil {
-				revertMsgErr := errDecoder.Decode(err)
-				hookGasLimit, hookErr := gasEstimationFailedHook(tx, revertMsgErr, err)
-				if hookErr != nil {
-					// when the hook returns an error, we stop the loop and return the error
-					return nil, hookErr
-				}
-				if hookGasLimit != nil {
-					// in case the hook returns a non-nil gas limit, we use it for the next iteration
-					gasLimit = hookGasLimit.Uint64()
-				}
-			}
-			continue
-		}
-
-		if signedTx == nil {
-			// if in the above process, we didn't find any pending tx for the task, we proceed to
-			// normal process
-			if beforeSignAndBroadcastHook != nil {
-				hookError := beforeSignAndBroadcastHook(tx, err)
-				if hookError != nil {
-					return nil, fmt.Errorf("after tx building and before signing and broadcasting hook error: %w", hookError)
-				}
-			}
-			signedTx, successful, broadcastErr = wm.signTxAndBroadcast(from, tx, network)
-		}
-
-		if signedTx != nil {
-			oldTxs[signedTx.Hash().Hex()] = signedTx
-		}
-
-		if !successful {
-			logger.WithFields(logger.Fields{
-				"tx_hash":         signedTx.Hash().Hex(),
-				"nonce":           tx.Nonce(),
-				"gas_price":       tx.GasPrice().String(),
-				"tip_cap":         tx.GasTipCap().String(),
-				"max_fee_per_gas": tx.GasFeeCap().String(),
-				"error":           broadcastErr,
-			}).Debug("Unsuccessful signing and broadcasting transaction")
-
-			// there are a few cases we should handle
-			// 1. insufficient fund
-			if broadcastErr == ErrInsufficientFund {
-				// wait for 5 seconds and retry with the same nonce because the nonce is already acquired from
-				// the context manager
-				retryNonce = big.NewInt(int64(tx.Nonce()))
-				continue
-			}
-
-			// 2. nonce is low
-			if broadcastErr == ErrNonceIsLow {
-				// in this case, we need to check if the last transaction is mined or it is lost
-				statuses, err := wm.getTxStatuses(oldTxs, network)
-				if err != nil {
-					logger.WithFields(logger.Fields{
-						"error": err,
-					}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
-					// ignore the error and retry
-					continue
-				}
-				// if it is mined, we don't need to do anything, just stop the loop and return
-				for txhash, status := range statuses {
-					if status.Status == "done" || status.Status == "reverted" {
-						return oldTxs[txhash], nil
+			// Find highest gas price pending transaction to monitor
+			highestGasPrice := big.NewInt(0)
+			var bestTx *types.Transaction
+			for txhash, status := range statuses {
+				if status.Status == "pending" {
+					if tx, exists := ctx.oldTxs[txhash]; exists && tx != nil {
+						if tx.GasPrice().Cmp(highestGasPrice) > 0 {
+							highestGasPrice = tx.GasPrice()
+							bestTx = tx
+						}
 					}
 				}
-
-				// in this case, old txes weren't mined but the nonce is already used, it means
-				// a different tx is with the same nonce was mined somewhere else
-				// so we need to retry with a new nonce
-				retryNonce = nil
-				continue
 			}
 
-			// 3. gas limit is too low
-			if broadcastErr == ErrGasLimitIsTooLow {
-				// in this case, we just rely on the loop to hope it will finally have a better gas limit estimation
-				// however, the same nonce must be used since it is acquired from the context manager already
-				retryNonce = big.NewInt(int64(tx.Nonce()))
-				continue
-			}
-
-			// 4. tx is known
-			if broadcastErr == ErrTxIsKnown {
-				// in this case, we need to speed up the tx by increasing the gas price and tip cap
-				// however, it should be handled by the slow status gotten from the monitor tx below
-				// so we just need to retry with the same nonce
-				retryNonce = big.NewInt(int64(tx.Nonce()))
-				continue
-			}
-
-			retryNonce = big.NewInt(int64(tx.Nonce()))
-			continue
-		} else {
-			logger.WithFields(logger.Fields{
-				"tx_hash":         signedTx.Hash().Hex(),
-				"nonce":           tx.Nonce(),
-				"gas_price":       tx.GasPrice().String(),
-				"tip_cap":         tx.GasTipCap().String(),
-				"max_fee_per_gas": tx.GasFeeCap().String(),
-			}).Info("Signed and broadcasted transaction")
-
-			if afterSignAndBroadcastHook != nil {
-				hookError := afterSignAndBroadcastHook(signedTx, broadcastErr)
-				if hookError != nil {
-					return signedTx, fmt.Errorf("after signing and broadcasting hook error: %w", hookError)
+			if bestTx != nil {
+				// We have a pending transaction, monitor it instead of retrying
+				logger.WithFields(logger.Fields{
+					"tx_hash": bestTx.Hash().Hex(),
+					"nonce":   bestTx.Nonce(),
+				}).Info("Found pending transaction during gas estimation failure, monitoring it instead")
+				// Return the transaction but don't set ShouldReturn so it goes to monitoring
+				return &TxExecutionResult{
+					Transaction:  bestTx,
+					ShouldRetry:  false,
+					ShouldReturn: false,
+					Error:        nil,
 				}
 			}
-		}
-
-		statusChan := wm.MonitorTx(signedTx, network, txCheckInterval)
-		status := <-statusChan
-		switch status {
-		case "mined", "reverted":
-			return signedTx, nil
-		case "lost":
-			logger.WithFields(logger.Fields{
-				"tx_hash": signedTx.Hash().Hex(),
-			}).Info("Transaction lost, retrying...")
-			retryNonce = nil
-			time.Sleep(5 * time.Second)
-		case "slow":
-			logger.WithFields(logger.Fields{
-				"tx_hash": signedTx.Hash().Hex(),
-			}).Info("Transaction slow, retrying with the same nonce and increasing gas price by 20%% and tip cap by 10%%...")
-			retryGasPrice = jarviscommon.BigToFloat(tx.GasPrice(), 9)*1.2 - extraGasPrice
-			retryTipCap = jarviscommon.BigToFloat(tx.GasTipCap(), 9)*1.1 - extraTipCapGwei
-			retryNonce = big.NewInt(int64(tx.Nonce()))
-			time.Sleep(5 * time.Second)
 		}
 	}
 
-	return nil, errors.Join(ErrEnsureTxOutOfRetries, err)
+	// Handle gas estimation failed hook
+	if errDecoder != nil && ctx.gasEstimationFailedHook != nil {
+		revertMsgErr := errDecoder.Decode(err)
+		hookGasLimit, hookErr := ctx.gasEstimationFailedHook(nil, revertMsgErr, err)
+		if hookErr != nil {
+			return &TxExecutionResult{
+				Transaction:  nil,
+				ShouldRetry:  false,
+				ShouldReturn: true,
+				Error:        hookErr,
+			}
+		}
+		if hookGasLimit != nil {
+			ctx.gasLimit = hookGasLimit.Uint64()
+		}
+	}
+
+	// Increment retry count for gas estimation failure
+	ctx.actualRetryCount++
+	if ctx.actualRetryCount > ctx.numRetries {
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  false,
+			ShouldReturn: true,
+			Error:        errors.Join(ErrEnsureTxOutOfRetries, fmt.Errorf("gas estimation failed after %d retries", ctx.numRetries)),
+		}
+	}
+
+	return &TxExecutionResult{
+		Transaction:  nil,
+		ShouldRetry:  true,
+		ShouldReturn: false,
+		Error:        nil,
+	}
+}
+
+// signAndBroadcastTransaction handles the signing and broadcasting process
+func (wm *WalletManager) signAndBroadcastTransaction(tx *types.Transaction, ctx *TxExecutionContext) *TxExecutionResult {
+	// Execute before hook
+	if ctx.beforeSignAndBroadcastHook != nil {
+		if hookError := ctx.beforeSignAndBroadcastHook(tx, nil); hookError != nil {
+			return &TxExecutionResult{
+				Transaction:  nil,
+				ShouldRetry:  false,
+				ShouldReturn: true,
+				Error:        fmt.Errorf("after tx building and before signing and broadcasting hook error: %w", hookError),
+			}
+		}
+	}
+
+	// Sign transaction
+	signedAddr, signedTx, err := wm.signTx(ctx.from, tx, ctx.network)
+	if err != nil {
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  false,
+			ShouldReturn: true,
+			Error:        fmt.Errorf("failed to sign transaction: %w", err),
+		}
+	}
+
+	// Verify signed address matches expected address
+	if signedAddr.Cmp(ctx.from) != 0 {
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  false,
+			ShouldReturn: true,
+			Error: fmt.Errorf(
+				"signed from wrong address. You could use wrong hw or passphrase. Expected wallet: %s, signed wallet: %s",
+				ctx.from.Hex(),
+				signedAddr.Hex(),
+			),
+		}
+	}
+
+	// Broadcast transaction
+	_, successful, broadcastErr := wm.broadcastTx(signedTx)
+
+	if signedTx != nil {
+		ctx.oldTxs[signedTx.Hash().Hex()] = signedTx
+	}
+
+	if !successful {
+		// Only log if signedTx is not nil to avoid panic
+		if signedTx != nil {
+			logger.WithFields(logger.Fields{
+				"tx_hash":         signedTx.Hash().Hex(),
+				"nonce":           signedTx.Nonce(),
+				"gas_price":       signedTx.GasPrice().String(),
+				"tip_cap":         signedTx.GasTipCap().String(),
+				"max_fee_per_gas": signedTx.GasFeeCap().String(),
+				"error":           broadcastErr,
+			}).Debug("Unsuccessful signing and broadcasting transaction")
+		} else {
+			logger.WithFields(logger.Fields{
+				"nonce":     tx.Nonce(),
+				"gas_price": tx.GasPrice().String(),
+				"error":     broadcastErr,
+			}).Debug("Unsuccessful signing and broadcasting transaction (no signed tx)")
+		}
+
+		return wm.handleBroadcastError(broadcastErr, tx, ctx)
+	}
+
+	// Log successful broadcast
+	logger.WithFields(logger.Fields{
+		"tx_hash":         signedTx.Hash().Hex(),
+		"nonce":           signedTx.Nonce(),
+		"gas_price":       signedTx.GasPrice().String(),
+		"tip_cap":         signedTx.GasTipCap().String(),
+		"max_fee_per_gas": signedTx.GasFeeCap().String(),
+	}).Info("Signed and broadcasted transaction")
+
+	// Execute after hook - convert BroadcastError to error for hook
+	var hookErr error
+	if broadcastErr != nil {
+		hookErr = broadcastErr
+	}
+
+	if ctx.afterSignAndBroadcastHook != nil {
+		if hookError := ctx.afterSignAndBroadcastHook(signedTx, hookErr); hookError != nil {
+			return &TxExecutionResult{
+				Transaction:  signedTx,
+				ShouldRetry:  false,
+				ShouldReturn: true,
+				Error:        fmt.Errorf("after signing and broadcasting hook error: %w", hookError),
+			}
+		}
+	}
+
+	return &TxExecutionResult{
+		Transaction:  signedTx,
+		ShouldRetry:  false,
+		ShouldReturn: false,
+		Error:        nil,
+	}
+}
+
+// handleBroadcastError processes various broadcast errors and determines retry strategy
+func (wm *WalletManager) handleBroadcastError(broadcastErr BroadcastError, tx *types.Transaction, ctx *TxExecutionContext) *TxExecutionResult {
+	// Special case: nonce is low requires checking if transaction is already mined
+	if broadcastErr == ErrNonceIsLow {
+		return wm.handleNonceIsLowError(tx, ctx)
+	}
+
+	// Special case: tx is known doesn't count as retry (we're just waiting for it to be mined)
+	// in this case, we need to speed up the tx by increasing the gas price and tip cap
+	// however, it should be handled by the slow status gotten from the monitor tx
+	// so we just need to retry with the same nonce
+	if broadcastErr == ErrTxIsKnown {
+		ctx.retryNonce = big.NewInt(int64(tx.Nonce()))
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  true,
+			ShouldReturn: false,
+			Error:        nil,
+		}
+	}
+
+	// All other errors count as retry attempts
+	var errorMsg string
+	switch broadcastErr {
+	case ErrInsufficientFund:
+		errorMsg = "insufficient fund"
+	case ErrGasLimitIsTooLow:
+		errorMsg = "gas limit too low"
+	default:
+		errorMsg = fmt.Sprintf("broadcast error: %v", broadcastErr)
+	}
+
+	if result := ctx.incrementRetryCountAndCheck(errorMsg); result != nil {
+		return result
+	}
+
+	// Keep the same nonce for retry
+	ctx.retryNonce = big.NewInt(int64(tx.Nonce()))
+	return &TxExecutionResult{
+		Transaction:  nil,
+		ShouldRetry:  true,
+		ShouldReturn: false,
+		Error:        nil,
+	}
+}
+
+// handleNonceIsLowError specifically handles the nonce is low error case
+func (wm *WalletManager) handleNonceIsLowError(tx *types.Transaction, ctx *TxExecutionContext) *TxExecutionResult {
+	statuses, err := wm.getTxStatuses(ctx.oldTxs, ctx.network)
+	if err != nil {
+		logger.WithFields(logger.Fields{
+			"error": err,
+		}).Debug("Getting tx statuses in case where tx wasn't broadcasted because nonce is too low. Ignore and continue the retry loop")
+
+		if result := ctx.incrementRetryCountAndCheck("nonce is low and status check failed"); result != nil {
+			return result
+		}
+
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  true,
+			ShouldReturn: false,
+			Error:        nil,
+		}
+	}
+
+	// Check if any old transaction is completed
+	for txhash, status := range statuses {
+		if status.Status == "done" || status.Status == "reverted" {
+			if tx, exists := ctx.oldTxs[txhash]; exists && tx != nil {
+				return &TxExecutionResult{
+					Transaction:  tx,
+					ShouldRetry:  false,
+					ShouldReturn: true,
+					Error:        nil,
+				}
+			}
+		}
+	}
+
+	// No completed transactions found, retry with new nonce
+	if result := ctx.incrementRetryCountAndCheck("nonce is low and no pending transactions"); result != nil {
+		return result
+	}
+	ctx.retryNonce = nil
+
+	return &TxExecutionResult{
+		Transaction:  nil,
+		ShouldRetry:  true,
+		ShouldReturn: false,
+		Error:        nil,
+	}
+}
+
+// incrementRetryCountAndCheck increments retry count and checks if we've exceeded retries
+func (ctx *TxExecutionContext) incrementRetryCountAndCheck(errorMsg string) *TxExecutionResult {
+	ctx.actualRetryCount++
+	if ctx.actualRetryCount > ctx.numRetries {
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  false,
+			ShouldReturn: true,
+			Error:        errors.Join(ErrEnsureTxOutOfRetries, fmt.Errorf("%s after %d retries", errorMsg, ctx.numRetries)),
+		}
+	}
+	return nil
+}
+
+// handleTransactionStatus processes different transaction statuses
+func (wm *WalletManager) handleTransactionStatus(status string, signedTx *types.Transaction, ctx *TxExecutionContext) *TxExecutionResult {
+	switch status {
+	case "mined", "reverted":
+		return &TxExecutionResult{
+			Transaction:  signedTx,
+			ShouldRetry:  false,
+			ShouldReturn: true,
+			Error:        nil,
+		}
+
+	case "lost":
+		logger.WithFields(logger.Fields{
+			"tx_hash": signedTx.Hash().Hex(),
+		}).Info("Transaction lost, retrying...")
+
+		ctx.actualRetryCount++
+		if ctx.actualRetryCount > ctx.numRetries {
+			return &TxExecutionResult{
+				Transaction:  nil,
+				ShouldRetry:  false,
+				ShouldReturn: true,
+				Error:        errors.Join(ErrEnsureTxOutOfRetries, fmt.Errorf("transaction lost after %d retries", ctx.numRetries)),
+			}
+		}
+		ctx.retryNonce = nil
+
+		// Sleep will be handled in main loop based on actualRetryCount
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  true,
+			ShouldReturn: false,
+			Error:        nil,
+		}
+
+	case "slow":
+		// Try to adjust gas prices for slow transaction
+		if ctx.adjustGasPricesForSlowTx(signedTx) {
+			logger.WithFields(logger.Fields{
+				"tx_hash": signedTx.Hash().Hex(),
+			}).Info(fmt.Sprintf("Transaction slow, continuing to monitor with increased gas price by %.0f%% and tip cap by %.0f%%...",
+				(GasPriceIncreasePercent-1)*100, (TipCapIncreasePercent-1)*100))
+
+			// Continue retrying with adjusted gas prices
+			return &TxExecutionResult{
+				Transaction:  nil,
+				ShouldRetry:  true,
+				ShouldReturn: false,
+				Error:        nil,
+			}
+		} else {
+			// Limits reached - stop retrying and return error
+			logger.WithFields(logger.Fields{
+				"tx_hash":       signedTx.Hash().Hex(),
+				"max_gas_price": ctx.maxGasPrice,
+				"max_tip_cap":   ctx.maxTipCap,
+			}).Warn("Transaction slow but gas price protection limits reached. Stopping retry attempts.")
+
+			return &TxExecutionResult{
+				Transaction:  signedTx,
+				ShouldRetry:  false,
+				ShouldReturn: true,
+				Error:        errors.Join(ErrGasPriceLimitReached, fmt.Errorf("maxGasPrice: %f, maxTipCap: %f", ctx.maxGasPrice, ctx.maxTipCap)),
+			}
+		}
+
+	default:
+		// Unknown status, treat as retry
+		return &TxExecutionResult{
+			Transaction:  nil,
+			ShouldRetry:  true,
+			ShouldReturn: false,
+			Error:        nil,
+		}
+	}
 }
 
 func (wm *WalletManager) EnsureTx(
@@ -835,6 +1103,7 @@ func (wm *WalletManager) EnsureTx(
 		gasLimit, extraGasLimit,
 		gasPrice, extraGasPrice,
 		tipCapGwei, extraTipCapGwei,
+		0, 0, // Default maxGasPrice and maxTipCap (0 means no limit)
 		data,
 		network,
 		nil,

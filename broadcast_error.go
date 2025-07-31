@@ -19,6 +19,10 @@ func NewBroadcastError(err error) BroadcastError {
 		return nil
 	}
 
+	// Check error conditions in priority order
+	if IsInsufficientFund(err) {
+		return ErrInsufficientFund
+	}
 	if IsNonceIsLow(err) {
 		return ErrNonceIsLow
 	}
@@ -48,4 +52,16 @@ func IsNonceIsLow(err error) bool {
 	hasUnderprice := strings.Contains(err.Error(), "underprice")
 	hasNonceAlreadyExist := strings.Contains(err.Error(), "nonce") && strings.Contains(err.Error(), "already exist")
 	return hasNonceAndLow || hasUnderprice || hasNonceAlreadyExist
+}
+
+func IsInsufficientFund(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	hasInsufficientFunds := strings.Contains(errMsg, "insufficient funds")
+	hasInsufficientBalance := strings.Contains(errMsg, "insufficient balance")
+	hasNotEnoughFunds := strings.Contains(errMsg, "not enough funds")
+	hasBalanceTooLow := strings.Contains(errMsg, "balance too low")
+	return hasInsufficientFunds || hasInsufficientBalance || hasNotEnoughFunds || hasBalanceTooLow
 }

@@ -28,6 +28,8 @@ type TxRequest struct {
 	extraGasPrice   float64
 	tipCapGwei      float64
 	extraTipCapGwei float64
+	maxGasPrice     float64
+	maxTipCap       float64
 	data            []byte
 	network         networks.Network
 
@@ -127,6 +129,18 @@ func (r *TxRequest) SetExtraTipCapGwei(extraTipCapGwei float64) *TxRequest {
 	return r
 }
 
+// SetMaxGasPrice sets the maximum gas price limit
+func (r *TxRequest) SetMaxGasPrice(maxGasPrice float64) *TxRequest {
+	r.maxGasPrice = maxGasPrice
+	return r
+}
+
+// SetMaxTipCap sets the maximum tip cap limit
+func (r *TxRequest) SetMaxTipCap(maxTipCap float64) *TxRequest {
+	r.maxTipCap = maxTipCap
+	return r
+}
+
 // SetData sets the transaction data
 func (r *TxRequest) SetData(data []byte) *TxRequest {
 	r.data = data
@@ -163,7 +177,7 @@ func (r *TxRequest) SetGasEstimationFailedHook(hook GasEstimationFailedHook) *Tx
 	return r
 }
 
-// execute executes the transaction request
+// Execute executes the transaction request
 func (r *TxRequest) Execute() (*types.Transaction, error) {
 	return r.wm.EnsureTxWithHooks(
 		r.numRetries,
@@ -176,6 +190,7 @@ func (r *TxRequest) Execute() (*types.Transaction, error) {
 		r.gasLimit, r.extraGasLimit,
 		r.gasPrice, r.extraGasPrice,
 		r.tipCapGwei, r.extraTipCapGwei,
+		r.maxGasPrice, r.maxTipCap,
 		r.data,
 		r.network,
 		r.beforeSignAndBroadcastHook,
