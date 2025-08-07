@@ -404,7 +404,7 @@ func (wm *WalletManager) GasSetting(network networks.Network) (*GasInfo, error) 
 	return wm.getGasSettingInfo(network), nil
 }
 
-func (wm *WalletManager) buildTx(
+func (wm *WalletManager) BuildTx(
 	txType uint8,
 	from, to common.Address,
 	nonce *big.Int,
@@ -488,7 +488,7 @@ func (wm *WalletManager) registerBroadcastedTx(tx *types.Transaction, network ne
 	return nil
 }
 
-func (wm *WalletManager) broadcastTx(
+func (wm *WalletManager) BroadcastTx(
 	tx *types.Transaction,
 ) (hash string, broadcasted bool, err BroadcastError) {
 	network, err := networks.GetNetworkByID(tx.ChainId().Uint64())
@@ -657,7 +657,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 // executeTransactionAttempt handles building and broadcasting a single transaction attempt
 func (wm *WalletManager) executeTransactionAttempt(ctx *TxExecutionContext, errDecoder *ErrorDecoder) *TxExecutionResult {
 	// Build transaction
-	builtTx, err := wm.buildTx(
+	builtTx, err := wm.BuildTx(
 		ctx.txType,
 		ctx.from,
 		ctx.to,
@@ -832,7 +832,7 @@ func (wm *WalletManager) signAndBroadcastTransaction(tx *types.Transaction, ctx 
 	}
 
 	// Broadcast transaction
-	_, successful, broadcastErr := wm.broadcastTx(signedTx)
+	_, successful, broadcastErr := wm.BroadcastTx(signedTx)
 
 	if signedTx != nil {
 		ctx.oldTxs[signedTx.Hash().Hex()] = signedTx
