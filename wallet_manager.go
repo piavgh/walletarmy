@@ -459,7 +459,7 @@ func (wm *WalletManager) BuildTx(
 	), nil
 }
 
-func (wm *WalletManager) signTx(
+func (wm *WalletManager) SignTx(
 	wallet common.Address,
 	tx *types.Transaction,
 	network networks.Network,
@@ -807,7 +807,7 @@ func (wm *WalletManager) signAndBroadcastTransaction(tx *types.Transaction, ctx 
 	}
 
 	// Sign transaction
-	signedAddr, signedTx, err := wm.signTx(ctx.from, tx, ctx.network)
+	signedAddr, signedTx, err := wm.SignTx(ctx.from, tx, ctx.network)
 	if err != nil {
 		return &TxExecutionResult{
 			Transaction:  nil,
