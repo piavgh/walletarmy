@@ -38,42 +38,42 @@ func NewErrorDecoder(abis ...abi.ABI) (*ErrorDecoder, error) {
 // Decode decodes the error from a contract call.
 // It should always wrap the original error (using %w).
 // It can only decode Solidity custom errors https://soliditylang.org/blog/2021/04/21/custom-errors/
-func (d *ErrorDecoder) Decode(err error) error {
+func (d *ErrorDecoder) Decode(err error) (any, error) {
 	origErr := err
 	var dataErr rpc.DataError
 	if !errors.As(err, &dataErr) {
-		return fmt.Errorf("not a Solidity custom error: %w", err)
+		return nil, fmt.Errorf("not a Solidity custom error: %w", err)
 	}
 
 	errorData := dataErr.ErrorData()
 	if errorData == nil {
-		return fmt.Errorf("no error data, original error: %w", origErr)
+		return nil, fmt.Errorf("no error data, original error: %w", origErr)
 	}
 
 	hexStr, ok := errorData.(string)
 	if !ok {
-		return fmt.Errorf("error data is not string, original error: %w", origErr)
+		return nil, fmt.Errorf("error data is not string, original error: %w", origErr)
 	}
 
 	hexStr = strings.TrimPrefix(hexStr, "0x")
 	errorBytes, decodeErr := hex.DecodeString(hexStr)
 	if decodeErr != nil {
-		return fmt.Errorf("failed to decode error data: %v, original error: %w", decodeErr, origErr)
+		return nil, fmt.Errorf("failed to decode error data: %v, original error: %w", decodeErr, origErr)
 	}
 
 	if len(errorBytes) < 4 {
-		return fmt.Errorf("invalid error data length, original error: %w", origErr)
+		return nil, fmt.Errorf("invalid error data length, original error: %w", origErr)
 	}
 
 	errorSelector := hex.EncodeToString(errorBytes[:4])
 	if abiError, exists := d.errorBySelector[errorSelector]; exists {
 		errParams, unpackErr := abiError.Unpack(errorBytes)
 		if unpackErr != nil {
-			return fmt.Errorf("failed to unpack error selector %s: %v, original error: %w", abiError.Name, unpackErr, origErr)
+			return nil, fmt.Errorf("failed to unpack error selector %s: %v, original error: %w", abiError.Name, unpackErr, origErr)
 		}
 
-		return fmt.Errorf("contract error: %s with params: %v, original error: %w", abiError.Name, errParams, origErr)
+		return errParams, fmt.Errorf("contract error: %s with params: %v, original error: %w", abiError.Name, errParams, origErr)
 	}
 
-	return fmt.Errorf("unknown error: 0x%s, original error: %w", errorSelector, origErr)
+	return nil, fmt.Errorf("unknown error: 0x%s, original error: %w", errorSelector, origErr)
 }

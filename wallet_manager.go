@@ -758,8 +758,8 @@ func (wm *WalletManager) handleGasEstimationFailure(ctx *TxExecutionContext, err
 
 	// Handle gas estimation failed hook
 	if errDecoder != nil && ctx.gasEstimationFailedHook != nil {
-		revertMsgErr := errDecoder.Decode(err)
-		hookGasLimit, hookErr := ctx.gasEstimationFailedHook(nil, revertMsgErr, err)
+		revertParams, revertMsgErr := errDecoder.Decode(err)
+		hookGasLimit, hookErr := ctx.gasEstimationFailedHook(nil, revertParams, revertMsgErr, err)
 		if hookErr != nil {
 			return &TxExecutionResult{
 				Transaction:  nil,

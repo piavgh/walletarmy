@@ -14,4 +14,4 @@ type Hook func(tx *types.Transaction, err error) error
 // This hook will NOT be called if the tx request doesn't have any abis set
 // If the hook returns a non-nil gas limit, the gas limit will be used to do the next iteration
 // The hook should return an error to stop the loop and return the error
-type GasEstimationFailedHook func(tx *types.Transaction, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error)
+type GasEstimationFailedHook func(tx *types.Transaction, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error)
