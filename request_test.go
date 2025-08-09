@@ -18,7 +18,7 @@ func mockHook(tx *types.Transaction, err error) error {
 }
 
 // MockGasEstimationFailedHook for testing gas estimation failed hooks
-func mockGasEstimationFailedHook(tx *types.Transaction, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
+func mockGasEstimationFailedHook(tx *types.Transaction, abiError *abi.Error, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
 	return big.NewInt(21000), nil
 }
 
@@ -303,10 +303,10 @@ func TestTxRequest_SetGasEstimationFailedHook(t *testing.T) {
 		req := wm.R() // Fresh request
 
 		// Create two different hook functions
-		hook1 := func(tx *types.Transaction, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
+		hook1 := func(tx *types.Transaction, abiError *abi.Error, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
 			return big.NewInt(25000), nil
 		}
-		hook2 := func(tx *types.Transaction, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
+		hook2 := func(tx *types.Transaction, abiError *abi.Error, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
 			return big.NewInt(30000), nil
 		}
 
@@ -451,10 +451,10 @@ func TestTxRequest_MultipleSettersOfSameType(t *testing.T) {
 	assert.Equal(t, mockABI2, req.abis[0])
 
 	// Test multiple gas estimation failed hook sets
-	hook1 := func(tx *types.Transaction, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
+	hook1 := func(tx *types.Transaction, abiError *abi.Error, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
 		return big.NewInt(25000), nil
 	}
-	hook2 := func(tx *types.Transaction, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
+	hook2 := func(tx *types.Transaction, abiError *abi.Error, revertParams any, revertMsgError, gasEstimationError error) (gasLimit *big.Int, err error) {
 		return big.NewInt(35000), nil
 	}
 	req.SetGasEstimationFailedHook(hook1).SetGasEstimationFailedHook(hook2)
