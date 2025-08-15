@@ -178,7 +178,7 @@ func (r *TxRequest) SetGasEstimationFailedHook(hook GasEstimationFailedHook) *Tx
 }
 
 // Execute executes the transaction request
-func (r *TxRequest) Execute() (*types.Transaction, error) {
+func (r *TxRequest) Execute() (*types.Transaction, *types.Receipt, error) {
 	return r.wm.EnsureTxWithHooks(
 		r.numRetries,
 		r.sleepDuration,

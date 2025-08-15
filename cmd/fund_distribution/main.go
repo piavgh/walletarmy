@@ -183,7 +183,7 @@ func EnsureTransfer(cm *walletarmy.WalletManager, fromPrivateKeyConfig PrivateKe
 		amountAfterGas = big.NewInt(0).Sub(amountAfterGas, L2_GAS_OVERHEAD)
 
 		// send all of the funds to the to address
-		tx, err = cm.EnsureTx(
+		tx, _, err = cm.EnsureTx(
 			types.LegacyTxType, // tx type
 			fromAddress, toAddress,
 			amountAfterGas,
@@ -197,7 +197,7 @@ func EnsureTransfer(cm *walletarmy.WalletManager, fromPrivateKeyConfig PrivateKe
 			network,
 		)
 	} else {
-		tx, err = cm.EnsureTx(
+		tx, _, err = cm.EnsureTx(
 			types.DynamicFeeTxType, // tx type
 			fromAddress, toAddress,
 			amount,  // amount

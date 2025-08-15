@@ -46,6 +46,7 @@ var (
 // TxExecutionResult represents the outcome of a transaction execution step
 type TxExecutionResult struct {
 	Transaction  *types.Transaction
+	Receipt      *types.Receipt
 	ShouldRetry  bool
 	ShouldReturn bool
 	Error        error
@@ -519,31 +520,48 @@ func (wm *WalletManager) createErrorDecoder(abis []abi.ABI) *ErrorDecoder {
 	return errDecoder
 }
 
+type TxStatus struct {
+	Status  string
+	Receipt *types.Receipt
+}
+
 // MonitorTx non-blocking way to monitor the tx status, it returns a channel that will be closed when the tx monitoring is done
 // the channel is supposed to receive the following values:
 //  1. "mined" if the tx is mined
 //  2. "slow" if the tx is too slow to be mined (so receiver might want to retry with higher gas price)
 //  3. other strings if the tx failed and the reason is returned by the node or other debugging error message that the node can return
-func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Network, txCheckInterval time.Duration) <-chan string {
+func (wm *WalletManager) MonitorTx(tx *types.Transaction, network networks.Network, txCheckInterval time.Duration) <-chan TxStatus {
 	txMonitor := wm.getTxMonitor(network)
-	statusChan := make(chan string)
+	statusChan := make(chan TxStatus)
 	monitorChan := txMonitor.MakeWaitChannelWithInterval(tx.Hash().Hex(), txCheckInterval)
 	go func() {
 		select {
 		case status := <-monitorChan:
 			switch status.Status {
 			case "done":
-				statusChan <- "mined"
+				statusChan <- TxStatus{
+					Status:  "mined",
+					Receipt: status.Receipt,
+				}
 			case "reverted":
 				// TODO: analyze to see what is the reason
-				statusChan <- "reverted"
+				statusChan <- TxStatus{
+					Status:  "reverted",
+					Receipt: status.Receipt,
+				}
 			case "lost":
-				statusChan <- "lost"
+				statusChan <- TxStatus{
+					Status:  "lost",
+					Receipt: nil,
+				}
 			default:
 				// ignore other statuses
 			}
 		case <-time.After(5 * time.Second):
-			statusChan <- "slow"
+			statusChan <- TxStatus{
+				Status:  "slow",
+				Receipt: nil,
+			}
 		}
 		close(statusChan)
 	}()
@@ -601,7 +619,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 	afterSignAndBroadcastHook Hook,
 	abis []abi.ABI,
 	gasEstimationFailedHook GasEstimationFailedHook,
-) (tx *types.Transaction, err error) {
+) (tx *types.Transaction, receipt *types.Receipt, err error) {
 	// Create execution context
 	ctx, err := NewTxExecutionContext(
 		numRetries, sleepDuration, txCheckInterval,
@@ -615,7 +633,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 		abis, gasEstimationFailedHook,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Create error decoder
@@ -631,7 +649,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 		// Execute transaction attempt
 		result := wm.executeTransactionAttempt(ctx, errDecoder)
 		if result.ShouldReturn {
-			return result.Transaction, result.Error
+			return result.Transaction, result.Receipt, result.Error
 		}
 		if result.ShouldRetry {
 			continue
@@ -645,7 +663,7 @@ func (wm *WalletManager) EnsureTxWithHooks(
 
 			result = wm.handleTransactionStatus(status, result.Transaction, ctx)
 			if result.ShouldReturn {
-				return result.Transaction, result.Error
+				return result.Transaction, result.Receipt, result.Error
 			}
 			if result.ShouldRetry {
 				continue
@@ -1003,11 +1021,12 @@ func (ctx *TxExecutionContext) incrementRetryCountAndCheck(errorMsg string) *TxE
 }
 
 // handleTransactionStatus processes different transaction statuses
-func (wm *WalletManager) handleTransactionStatus(status string, signedTx *types.Transaction, ctx *TxExecutionContext) *TxExecutionResult {
-	switch status {
+func (wm *WalletManager) handleTransactionStatus(status TxStatus, signedTx *types.Transaction, ctx *TxExecutionContext) *TxExecutionResult {
+	switch status.Status {
 	case "mined", "reverted":
 		return &TxExecutionResult{
 			Transaction:  signedTx,
+			Receipt:      status.Receipt,
 			ShouldRetry:  false,
 			ShouldReturn: true,
 			Error:        nil,
@@ -1091,7 +1110,7 @@ func (wm *WalletManager) EnsureTx(
 	extraTipCapGwei float64,
 	data []byte,
 	network networks.Network,
-) (tx *types.Transaction, err error) {
+) (tx *types.Transaction, receipt *types.Receipt, err error) {
 	return wm.EnsureTxWithHooks(
 		DefaultNumRetries,
 		DefaultSleepDuration,
